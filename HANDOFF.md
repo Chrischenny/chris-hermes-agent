@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-26
 >
-> 交接边界：P0 已完成，P1 尚未开始
+> 交接边界：P1 已完成，P2 尚未开始
 >
-> 下一阶段：P1 配置与 Policy Resolver
+> 下一阶段：P2 SQLite 与 Task State
 
 ## 1. Task
 
@@ -12,6 +12,7 @@
 - 本地目录：`/home/chen/code/chris-hermes-plugin`
 - 分支：`main`
 - P0 实现提交：`25f2261 feat: scaffold Hermes context handoff plugin`
+- P1 实现提交：`a3993fe feat: add model handoff policy resolver`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -77,7 +78,7 @@ Task Tools 和 bundled Skill；拆成两个插件会增加版本、安装和数�
 
 ### 4.3 Policy 原则
 
-计划支持：
+已支持：
 
 - `ratio`
 - `absolute_tokens`
@@ -91,8 +92,9 @@ Task Tools 和 bundled Skill；拆成两个插件会增加版本、安装和数�
 → default_policy
 ```
 
-示例阈值只属于文档示例，不能成为代码默认值。`gpt-5.6-sol` 的真实甜区和
-Emergency 阈值将在上线前由用户配置，不阻塞 P1 开发。
+模型模式沿用 Hermes 的最长子串语义；等长模式同时命中时视为歧义并 fail
+closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-5.6-sol` 的真实
+甜区和 Emergency 阈值将在上线前由用户配置，不阻塞后续开发。
 
 ## 5. Completed
 
@@ -109,10 +111,29 @@ P0 已完成：
 - 更新 README 和开发计划；
 - 提交并推送 P0。
 
+P1 已完成：
+
+- 使用 Manifest v2 `config_schema` 声明私有 `handoff` 配置；
+- 在 `register(ctx)` 中通过 `ctx.get_config("handoff")` 读取 Profile 设置；
+- 定义不可变 `Threshold`、`HandoffPolicy`、`PolicyResolution` 和
+  `PolicyError`；
+- 支持 `ratio` 和 `absolute_tokens`；
+- 实现精确模型、最长模型子串、Provider 和 default_policy 四级匹配；
+- 校验未知字段、缺失字段、类型、取值范围、Context Limit 和 Emergency
+  顺序；
+- 未匹配、无效和歧义配置均 fail closed，并保留结构化诊断；
+- 覆盖 `ContextHandoffEngine.update_model()`，在初始模型、模型切换和
+  fallback 时重新解析策略；
+- 保持 Compression、Task Tools 和 Context Rotation 安全关闭；
+- 更新 README 和开发计划并提交 P1。
+
 ## 6. Current State
 
-P0 实现处于安全关闭状态：
+P1 实现已能解析 Policy，但执行面仍处于安全关闭状态：
 
+- `ContextHandoffEngine` 持有当前 `policy_resolution`；
+- `threshold_tokens` 只反映已匹配且有效的普通 Handoff 起点；
+- 无配置或无效配置时 `observation_only=True` 且阈值清零；
 - `ContextHandoffEngine.should_compress()` 恒为 `False`；
 - `compress()` 严格原样返回输入消息列表；
 - 没有覆盖 `select_context()`，因此 Hermes 跳过 Context 选择 Hook；
@@ -130,18 +151,22 @@ P0 实现处于安全关闭状态：
 - `__init__.py`
 - `chris_hermes_agent/plugin.py`
 - `chris_hermes_agent/context_engine.py`
+- `chris_hermes_agent/models.py`
+- `chris_hermes_agent/errors.py`
+- `chris_hermes_agent/policy.py`
 - `chris_hermes_agent/task_tools.py`
 - `skills/context-handoff/SKILL.md`
 - `tests/contract/`
+- `tests/unit/test_policy.py`
 - `tests/integration/test_plugin_doctor.py`
 - `pyproject.toml`
 
 ## 7. Verification Evidence
 
-P0 最终验证结果：
+P1 最终验证结果：
 
-- 16 个契约/集成测试全部通过；
-- 代码覆盖率 100%；
+- 40 个单元/契约/集成测试全部通过；
+- 总覆盖率 93.18%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -157,13 +182,15 @@ uv run ruff check .
 uv run mypy chris_hermes_agent
 HERMES_AGENT_ROOT="$HOME/.hermes/hermes-agent" \
   uv run pytest --cov=chris_hermes_agent --cov-report=term-missing
-hermes plugins doctor . --ci
+uv build
+hermes_temp_dir=$(mktemp -d)
+HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 ```
 
 ## 8. Known Issues / Expected Limitations
 
 - Task Tools 和 Handoff Tool 目前有意不可用，不是缺陷；
-- Policy 配置尚未实现；
+- Policy 数值尚未写入 `chris-avatar`，这是上线前的用户配置项；
 - Runtime Status 尚未实现；
 - SQLite 和 Task State 尚未实现；
 - Context Rotation 尚未实现；
@@ -194,35 +221,34 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P1 开始，建议严格按以下顺序：
+新会话从 P2 开始，建议严格按以下顺序：
 
-1. 阅读本交接文件和开发计划 P1；
+1. 阅读本交接文件和开发计划 P2；
 2. 检查 `git status`，确认 `main` 与 `origin/main` 同步；
-3. 使用 `documentation-lookup` 核对 Hermes `ctx.get_config()`、
-   `ContextEngine.update_model()` 和插件设置 Schema；
-4. 使用 `tdd-workflow`，先编写 Policy Resolver 测试；
-5. 定义不可变 Policy 数据模型和错误模型；
-6. 实现：
-   - `ratio` Policy；
-   - `absolute_tokens` Policy；
-   - 精确模型匹配；
-   - 最长模型模式匹配；
-   - Provider Policy；
-   - `default_policy`；
-   - 未匹配和无效配置 fail closed；
-7. 在 `register(ctx)` 中读取插件私有配置并注入 ContextEngine；
-8. 测试模型切换时重新解析 Policy；
-9. 运行完整 P0 回归、覆盖率、类型检查和 Plugin Doctor；
-10. 更新计划进度，提交并推送 P1。
+3. 使用 `documentation-lookup` 核对 Hermes `ctx.plugin_db()` 的连接、路径、
+   生命周期和并发契约，以及 Tool Handler 可获得的 Session 标识；
+4. 使用 `tdd-workflow`，先编写 Migration、Repository 和 Task Service 测试；
+5. 定义 Task、Event、Checkpoint、Context Segment 和 Session Context State
+   的不可变数据模型；
+6. 实现版本化 SQLite Schema、迁移、外键、WAL 和连接初始化；
+7. 实现 Task/Event/Checkpoint/Segment Repository、事务回滚和乐观锁；
+8. 实现 Task 创建、查询、更新、父子关系、Event 追加和 Checkpoint 校验；
+9. 将 `task_state_manage`、`task_event_append`、`checkpoint_create` 从
+   `phase_not_ready` 切换为真实 Service Handler；
+10. 测试重启恢复、并发写入、事务失败和损坏输入；
+11. 运行完整 P0/P1 回归、覆盖率、类型检查、构建和 Plugin Doctor；
+12. 更新计划进度，提交并推送 P2。
 
-## 11. P1 Acceptance Criteria
+## 11. P2 Acceptance Criteria
 
-- 不同模型可以解析出不同 Policy；
-- 支持 ratio 和 absolute_tokens；
-- 匹配优先级确定且有测试；
-- 无匹配 Policy 时只观测，不启用 Handoff/Emergency；
-- 无效 Policy fail closed，并返回可诊断错误；
-- 没有任何硬编码甜区；
-- 模型切换重新解析 Policy；
-- P0 全部测试继续通过；
+- SQLite 由 Hermes `plugin_db()` 提供，不写入插件安装目录；
+- Schema 可从空数据库迁移到当前版本，重复初始化幂等；
+- Task、Event、Checkpoint、Segment 和 Session Context State 可持久化查询；
+- Task 支持父子关系和明确的状态转换；
+- Event 只追加且可按 Task 顺序追溯；
+- Checkpoint 结构完整且 `Next Actions` 非空；
+- Session Active Pointer 使用版本字段进行乐观锁；
+- 事务失败完整回滚，并发写入不会造成重复 Handoff 前置状态；
+- Gateway 进程重建 Repository 后可以恢复 Active Task/Segment；
+- P0/P1 全部测试继续通过；
 - 不修改或重启 `chris-avatar`。
