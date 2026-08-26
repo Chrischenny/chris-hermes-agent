@@ -1,5 +1,7 @@
 name: chris-hermes-agent
 version: 0.1.0
+manifest_version: 2
+api_version: 1
 description: "Agent-managed task state, checkpoints, and context handoff for long-running Hermes tasks."
 author: Chrischenny
 kind: standalone
@@ -8,3 +10,9 @@ provides_tools:
   - task_state_manage
   - task_event_append
   - checkpoint_create
+config_schema:
+  handoff:
+    type: dict
+    required: false
+    default: {}
+    description: "Model, provider, and default policies for context handoff and emergency fallback."

@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from agent.context_engine import ContextEngine
+
+from .models import PolicyResolution
+from .policy import PolicyResolver
+
+logger = logging.getLogger(__name__)
 
 HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
     "name": "handoff_context",
@@ -67,13 +73,26 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
 
     emit_automatic_compaction_status = False
 
-    def __init__(self) -> None:
+    def __init__(self, policy_config: object | None = None) -> None:
         self.last_prompt_tokens = 0
         self.last_completion_tokens = 0
         self.last_total_tokens = 0
         self.threshold_tokens = 0
         self.context_length = 0
         self.compression_count = 0
+        self.threshold_percent = 0.0
+        self.current_model = ""
+        self.current_provider = ""
+        self._policy_resolver = PolicyResolver(
+            {} if policy_config is None else policy_config
+        )
+        self.policy_resolution = PolicyResolution(
+            model="",
+            provider="",
+            context_limit=0,
+            match_source=None,
+            policy=None,
+        )
 
     @property
     def name(self) -> str:
@@ -87,6 +106,41 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             usage.get("total_tokens")
             or self.last_prompt_tokens + self.last_completion_tokens
         )
+
+    def update_model(
+        self,
+        model: str,
+        context_length: int,
+        base_url: str = "",
+        api_key: str = "",
+        provider: str = "",
+        api_mode: str = "",
+    ) -> None:
+        """Re-resolve user policy whenever Hermes changes model metadata."""
+        del base_url, api_key, api_mode
+        self.current_model = model
+        self.current_provider = provider
+        self.context_length = context_length
+        self.policy_resolution = self._policy_resolver.resolve(
+            model=model,
+            provider=provider,
+            context_limit=context_length,
+        )
+        threshold = self.policy_resolution.handoff_threshold_tokens
+        self.threshold_tokens = threshold or 0
+        self.threshold_percent = (
+            self.threshold_tokens / context_length
+            if self.threshold_tokens and context_length > 0
+            else 0.0
+        )
+        if self.policy_resolution.errors:
+            for error in self.policy_resolution.errors:
+                logger.warning(
+                    "Context handoff policy disabled: %s at %s: %s",
+                    error.code,
+                    error.path,
+                    error.message,
+                )
 
     def should_compress(self, prompt_tokens: int | None = None) -> bool:
         """Disable automatic compression until an explicit policy exists."""

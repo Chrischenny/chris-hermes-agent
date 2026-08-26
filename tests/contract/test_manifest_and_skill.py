@@ -26,7 +26,11 @@ def test_manifest_declares_native_standalone_plugin() -> None:
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
     assert manifest["version"] == "0.1.0"
+    assert manifest["manifest_version"] == 2
+    assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
+    assert manifest["config_schema"]["handoff"]["type"] == "dict"
+    assert manifest["config_schema"]["handoff"]["required"] is False
 
 
 def test_manifest_declares_tools_registered_by_plugin_context() -> None:

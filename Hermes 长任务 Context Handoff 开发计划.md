@@ -516,8 +516,8 @@ Skill 负责：
 | 阶段 | 状态 | 说明 |
 |---|---|---|
 | P0 工程骨架与契约测试 | 已完成 | 已提交并通过全部验证 |
-| P1 配置与 Policy Resolver | 下一阶段 | 尚未开始，重开会话后从此处继续 |
-| P2 SQLite 与 Task State | 未开始 | 依赖 P1 |
+| P1 配置与 Policy Resolver | 已完成 | 已实现配置注入、校验、匹配和模型切换 |
+| P2 SQLite 与 Task State | 下一阶段 | 尚未开始 |
 | P3 Runtime Status 与 Token 观测 | 未开始 | 依赖 P1 |
 | P4 Context Rotation | 未开始 | 依赖 P2、P3 |
 | P5 Skill、SOUL 与任务隔离 | 未开始 | 依赖 P2、P4 |
@@ -540,7 +540,7 @@ Skill 负责：
 
 ### P1：配置与 Policy Resolver
 
-状态：**下一阶段，尚未开始**
+状态：**已完成（2026-08-26）**
 
 - 实现配置读取、校验和模型匹配；
 - 支持 ratio/absolute_tokens；
@@ -548,6 +548,12 @@ Skill 负责：
 - 对无策略和错误策略 fail closed。
 
 完成标准：不同模型可以解析出不同 Policy，且无任何硬编码甜区。
+
+完成证据：插件通过 `ctx.get_config("handoff")` 读取 Profile 私有配置；
+Policy Resolver 支持 ratio、absolute_tokens、精确模型、最长模型子串、Provider
+和 default_policy，并对未知、冲突、越界及未匹配配置 fail closed；
+`ContextHandoffEngine.update_model()` 会重新解析策略。40 个单元、契约和集成测试
+通过，分支覆盖率超过 90%，Ruff、Mypy strict、构建和 Plugin Doctor 均通过。
 
 ### P2：SQLite 与 Task State
 

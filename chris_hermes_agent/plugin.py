@@ -13,8 +13,9 @@ SKILL_PATH = PLUGIN_ROOT / "skills" / "context-handoff" / "SKILL.md"
 
 
 def register(ctx: Any) -> None:
-    """Register the safe P0 surface with Hermes."""
-    ctx.register_context_engine(ContextHandoffEngine())
+    """Register the plugin with its profile-scoped handoff configuration."""
+    handoff_config = ctx.get_config("handoff", default={})
+    ctx.register_context_engine(ContextHandoffEngine(handoff_config))
 
     for name, schema, handler in TASK_TOOL_REGISTRATIONS:
         ctx.register_tool(

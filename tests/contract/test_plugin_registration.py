@@ -23,10 +23,18 @@ class RegisteredTool:
 
 
 class RecordingPluginContext:
-    def __init__(self) -> None:
+    def __init__(self, handoff_config: object | None = None) -> None:
         self.engines: list[ContextEngine] = []
         self.tools: list[RegisteredTool] = []
         self.skills: list[tuple[str, Path]] = []
+        self.handoff_config = handoff_config
+        self.config_reads: list[tuple[str, object]] = []
+
+    def get_config(self, key: str, default: object = None) -> object:
+        self.config_reads.append((key, default))
+        if key == "handoff" and self.handoff_config is not None:
+            return self.handoff_config
+        return default
 
     def register_context_engine(self, engine: ContextEngine) -> None:
         self.engines.append(engine)
@@ -83,6 +91,7 @@ def test_native_entrypoint_registers_engine_tools_and_skill() -> None:
 
     module.register(context)
 
+    assert context.config_reads == [("handoff", {})]
     assert len(context.engines) == 1
     assert context.engines[0].name == "context-handoff"
     assert [tool.name for tool in context.tools] == [
@@ -128,3 +137,28 @@ def test_p0_task_handlers_fail_closed_with_structured_json() -> None:
                 "message": f"{tool.name} is registered but disabled until P2",
             },
         }
+
+
+def test_registration_injects_private_handoff_config_into_engine() -> None:
+    module = _load_native_entrypoint()
+    context = RecordingPluginContext(
+        {
+            "model_policies": {
+                "configured-model": {
+                    "handoff_enabled": True,
+                    "sweet_zone": {"type": "ratio", "start": 0.42},
+                }
+            }
+        }
+    )
+
+    module.register(context)
+    engine = context.engines[0]
+    engine.update_model(
+        "configured-model",
+        100_000,
+        provider="configured-provider",
+    )
+
+    assert engine.policy_resolution.match_source == "exact:model:configured-model"
+    assert engine.policy_resolution.handoff_threshold_tokens == 42_000

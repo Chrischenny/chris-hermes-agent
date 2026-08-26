@@ -128,3 +128,84 @@ def test_engine_rejects_unknown_context_tool() -> None:
 
     assert result["ok"] is False
     assert result["error"]["code"] == "unknown_tool"
+
+
+def test_model_switch_re_resolves_policy_without_enabling_compression() -> None:
+    from chris_hermes_agent.context_engine import ContextHandoffEngine
+
+    engine = ContextHandoffEngine(
+        {
+            "model_policies": {
+                "model-a": {
+                    "handoff_enabled": True,
+                    "sweet_zone": {"type": "ratio", "start": 0.5},
+                },
+                "model-b": {
+                    "handoff_enabled": True,
+                    "sweet_zone": {
+                        "type": "absolute_tokens",
+                        "start": 30_000,
+                    },
+                },
+            }
+        }
+    )
+
+    engine.update_model("model-a", 100_000, provider="provider-a")
+    first_resolution = engine.policy_resolution
+
+    assert first_resolution.match_source == "exact:model:model-a"
+    assert first_resolution.handoff_threshold_tokens == 50_000
+    assert engine.threshold_tokens == 50_000
+    assert engine.should_compress(99_999) is False
+
+    engine.update_model("model-b", 80_000, provider="provider-b")
+
+    assert engine.policy_resolution is not first_resolution
+    assert engine.policy_resolution.match_source == "exact:model:model-b"
+    assert engine.policy_resolution.handoff_threshold_tokens == 30_000
+    assert engine.threshold_tokens == 30_000
+    assert engine.context_length == 80_000
+    assert engine.should_compress(99_999) is False
+
+
+def test_unmatched_or_invalid_model_policy_clears_previous_threshold() -> None:
+    from chris_hermes_agent.context_engine import ContextHandoffEngine
+
+    engine = ContextHandoffEngine(
+        {
+            "model_policies": {
+                "valid": {
+                    "handoff_enabled": True,
+                    "sweet_zone": {"type": "ratio", "start": 0.5},
+                },
+                "invalid": {
+                    "handoff_enabled": True,
+                    "sweet_zone": {"type": "ratio", "start": 1.5},
+                },
+            }
+        }
+    )
+    engine.update_model("valid", 100_000)
+    assert engine.threshold_tokens == 50_000
+
+    engine.update_model("unmatched", 100_000)
+    assert engine.threshold_tokens == 0
+    assert engine.policy_resolution.observation_only is True
+    assert engine.policy_resolution.errors == ()
+
+    engine.update_model("invalid", 100_000)
+    assert engine.threshold_tokens == 0
+    assert engine.policy_resolution.observation_only is True
+    assert engine.policy_resolution.errors[0].code == "ratio_out_of_range"
+
+
+def test_invalid_empty_config_container_is_not_treated_as_missing() -> None:
+    from chris_hermes_agent.context_engine import ContextHandoffEngine
+
+    engine = ContextHandoffEngine([])
+
+    engine.update_model("model", 100_000)
+
+    assert engine.policy_resolution.observation_only is True
+    assert engine.policy_resolution.errors[0].code == "invalid_handoff_config"
