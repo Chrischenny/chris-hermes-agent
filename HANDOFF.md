@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-26
 >
-> 交接边界：P2 已完成，P3 尚未开始
+> 交接边界：P3 已完成，P4 尚未开始
 >
-> 下一阶段：P3 Runtime Status 与 Token 观测
+> 下一阶段：P4 Context Rotation
 
 ## 1. Task
 
@@ -14,6 +14,7 @@
 - P0 实现提交：`25f2261 feat: scaffold Hermes context handoff plugin`
 - P1 实现提交：`a3993fe feat: add model handoff policy resolver`
 - P2 实现提交：`1b30c38 feat: persist task lifecycle and resume state`
+- P3 实现提交：`bfb862e feat: add runtime context status observation`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -110,6 +111,18 @@ closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-
 - P2 Resume 只更新持久化 Active Pointer，并明确返回
   `context_rotation_applied: false`；真正的 Provider Context Rotation 在 P4。
 
+### 4.5 Runtime Status 与 Token 观测
+
+- 使用 Hermes `estimate_messages_tokens_rough()` 估算当前消息 Request；
+- Runtime Status 是尾部临时 `user` 消息，只存在于 `select_context()` 返回的新
+  Request 列表；
+- 重复选择已经带有插件 Runtime Status 的 Request 时替换尾部状态，不累积；
+- Provider Usage 同时兼容 legacy 和 canonical 字段；
+- 没有 Usage 回调时，下一次 Request 将真实值标为 `unavailable`，不会沿用旧值；
+- ContextEngine 和 Task Tools 共享同一个 Profile Repository，并在每次 Request
+  查询当前 Session 的 Active Task/Segment Pointer；
+- 模型切换会清除旧模型 Usage，并立即展示新模型 Policy 和 Context Limit。
+
 ## 5. Completed
 
 P0 已完成：
@@ -157,18 +170,37 @@ P2 已完成：
 - 调整 `handoff_context` 契约，区分目标 Task 与切换前 Active Task/Segment；
 - 更新方案、README 和开发计划并提交 P2。
 
+P3 已完成：
+
+- 将版本更新到 `0.3.0`；
+- 新增不可变 `ProviderTokenUsage`，规范化 Hermes legacy/canonical Usage；
+- 新增 `RuntimeStatus`、格式化和自洽 Request Token 估算；
+- 覆盖 `select_context()`，只在 Request 浅拷贝尾部追加一条 Runtime Status；
+- 实现无 Usage 失效检测，避免把缺失值或旧值伪装成当前真实 Usage；
+- 实现重复选择去重和稳定 Prefix 保留；
+- 在 Session 生命周期中恢复 P2 Active Task/Segment Pointer；
+- 覆盖 Tool Loop、Retry、模型切换、无 Usage、无/无效 Policy 和 Session Reset；
+- 保持普通 Compression 和 Provider Context Rotation 安全关闭；
+- 更新版本、README 和开发计划并提交 P3。
+
 ## 6. Current State
 
-P2 已启用 Task 持久化，Context 执行面仍处于安全关闭状态：
+P3 已启用 Runtime 观测，Context Rotation 执行面仍处于安全关闭状态：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
 - `threshold_tokens` 只反映已匹配且有效的普通 Handoff 起点；
 - 无配置或无效配置时 `observation_only=True` 且阈值清零；
 - `ContextHandoffEngine.should_compress()` 恒为 `False`；
 - `compress()` 严格原样返回输入消息列表；
-- 没有覆盖 `select_context()`，因此 Hermes 跳过 Context 选择 Hook；
+- `select_context()` 每次返回带有一条最新 Runtime Status 的新 Request 列表；
+- 原消息列表、System Prompt、稳定 Prefix 和 Hermes Session History 不被修改；
+- Runtime Status 包含模型、Context Limit、估算/真实 Token、Policy 来源与阈值、
+  Active Task 和 Segment；
+- `estimated_prompt_tokens` 使用 Hermes 消息粗估接口并包含 Runtime Status 自身；
+- `last_prompt_tokens` 只代表最近一次 Provider 真实 Usage；缺失时明确不可用；
 - `task_state_manage`、`task_event_append`、`checkpoint_create` 已可用；
-- 数据库只在首次 Task Tool 调用时创建，路径为当前 Profile 的
+- Repository 在首次 Task Tool 调用或绑定 Session 后的首次 Runtime Status 读取时
+  惰性创建，路径为当前 Profile 的
   `plugin-data/chris-hermes-agent/data.db`；
 - Resume 会更新持久化 Task/Segment/Session Pointer，但明确报告 Provider
   Context 尚未 Rotation；
@@ -183,6 +215,8 @@ P2 已启用 Task 持久化，Context 执行面仍处于安全关闭状态：
 - `__init__.py`
 - `chris_hermes_agent/plugin.py`
 - `chris_hermes_agent/context_engine.py`
+- `chris_hermes_agent/context_builder.py`
+- `chris_hermes_agent/token_usage.py`
 - `chris_hermes_agent/models.py`
 - `chris_hermes_agent/errors.py`
 - `chris_hermes_agent/policy.py`
@@ -195,18 +229,21 @@ P2 已启用 Task 持久化，Context 执行面仍处于安全关闭状态：
 - `skills/context-handoff/SKILL.md`
 - `tests/contract/`
 - `tests/unit/test_policy.py`
+- `tests/unit/test_context_builder.py`
+- `tests/unit/test_token_usage.py`
 - `tests/unit/test_store.py`
 - `tests/unit/test_task_service.py`
 - `tests/integration/test_task_tools.py`
+- `tests/integration/test_runtime_status.py`
 - `tests/integration/test_plugin_doctor.py`
 - `pyproject.toml`
 
 ## 7. Verification Evidence
 
-P2 最终验证结果：
+P3 最终验证结果：
 
-- 62 个单元/契约/集成测试全部通过；
-- 总覆盖率 87.24%，超过 80% 门槛；
+- 74 个单元/契约/集成测试全部通过；
+- 总覆盖率 87.66%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -231,8 +268,10 @@ HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 
 - Handoff Tool 目前有意不可用，不是缺陷；
 - Policy 数值尚未写入 `chris-avatar`，这是上线前的用户配置项；
-- Runtime Status 和当前 Request Token 估算尚未实现；
-- P2 Task Resume 尚未连接 Provider Context Rotation；
+- 当前 Request Token 是 Hermes 的消息级粗估值；Tool Schema Token 不在
+  `select_context()` 的参数中，因此不包含在此字段内；
+- 上一 Response 真实 Usage 会滞后一轮，这是设计中的校准数据；
+- Task Resume 尚未连接 Provider Context Rotation；
 - 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
 - Context Rotation 尚未实现；
 - Emergency Fallback 尚未实现；
@@ -262,35 +301,40 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P3 开始，建议严格按以下顺序：
+新会话从 P4 开始，建议严格按以下顺序：
 
-1. 阅读本交接文件和开发计划 P3；
+1. 阅读本交接文件和开发计划 P4；
 2. 检查 `git status`，确认 `main` 与 `origin/main` 同步；
-3. 使用 `documentation-lookup` 核对 Hermes `select_context()` 的每 Request
-   调用顺序、Usage 规范化字段和可复用 Token 估算接口；
-4. 使用 `tdd-workflow`，先编写 Token Usage 和 Runtime Status 测试；
-5. 实现当前 Request `estimated_prompt_tokens` 和上一 Response
-   `last_prompt_tokens`；
-6. 覆盖 `select_context()`，只对本次 Request 的浅拷贝在尾部追加一条 Runtime
-   Status；
-7. Runtime Status 包含模型、Context Limit、估算/真实 Token、Policy 来源与
-   阈值、Active Task 和 Segment；
-8. 将 ContextEngine Session 生命周期接到 P2 Repository 的 Active Pointer；
-9. 测试 Tool Loop、Retry、模型切换、无 Usage、无 Policy、Prefix 稳定和
-   Runtime Status 不进入 Hermes Session History；
-10. 运行完整 P0/P1/P2 回归、覆盖率、类型检查、构建和 Plugin Doctor；
-11. 更新计划进度，提交并推送 P3。
+3. 使用 `documentation-lookup` 再核对 Hermes 当前 Request 消息游标、Tool
+   Call/Result Sanitizer 和 ContextEngine Tool Handler 的运行时 kwargs；
+4. 使用 `tdd-workflow`，先编写 Handoff 状态机和 Context Bootstrap 失败测试；
+5. 实现 `handoff_context` 的参数、Checkpoint 所属关系/Checksum 和 Expected
+   Active Pointer 校验；
+6. 在单个 SQLite 事务中关闭旧 Segment、创建新 Segment、更新 Pointer 并记录
+   `HANDOFF_COMPLETED`；
+7. 让下一次 `select_context()` 检测 Segment 变化，并用 Checkpoint 构造新的
+   Active Context；
+8. 保留 Hermes System/Prefill 稳定头、触发 Handoff 的 assistant tool call 与
+   对应 tool result，以及 Handoff 后新增消息；
+9. 排除旧 Segment 的大量 Tool Trace，同时保留完整 Hermes Session History；
+10. 测试同一 Agent Turn 连续执行、并发/重复 Handoff、Provider Retry、进程重启、
+    Checkpoint 损坏和 Tool Pairing；
+11. 运行完整 P0/P1/P2/P3 回归、覆盖率、类型检查、构建和 Plugin Doctor；
+12. 更新计划进度，提交并推送 P4。
 
-## 11. P3 Acceptance Criteria
+## 11. P4 Acceptance Criteria
 
-- 每次 Provider Request 都包含最多一条最新 Runtime Status；
-- Runtime Status 只存在于 Request 浅拷贝，绝不写入 Hermes Session History；
-- 不修改 System Prompt，不重新排列或改写稳定 Prefix；
-- 同时报告当前 Request 估算 Prompt Token 和上一 Response 真实 Usage；
-- Provider 不返回 Usage 时保持可诊断状态，不伪造真实值；
-- 无 Policy 时只报告模型、Context Limit 和使用事实，不猜测阈值；
-- 模型切换后立即显示新 Policy 和 Context Limit；
-- Runtime Status 能恢复当前 Active Task 和 Segment；
+- `handoff_context` 只接受属于目标 Task 的完整、Checksum 有效 Checkpoint；
+- Expected Active Task/Segment 不一致时 fail closed，不产生部分状态；
+- Segment 关闭、新 Segment、Pointer 和 Event 在一个事务中原子提交；
+- 成功结果包含新 Segment、Checkpoint、Task、Next Actions 和
+  `handoff_applied: true`；
+- 下一次 Provider Request 使用新 Context，且无需等待下一条用户消息；
+- 新 Context 保留 System/SOUL/Skills/Memory 等 Hermes 稳定头；
+- 触发 Handoff 的 Tool Call/Result 保持成对，不产生孤立 Tool Message；
+- 旧 Segment 大量 Tool Trace 不进入新 Request，但原始 Session History 不删除；
+- Runtime Status 继续只存在于 Request 尾部，并显示新的 Active Segment；
+- 并发或重复 Handoff 不得产生双 Segment 或重复 Event；
 - `should_compress()` 继续恒为 `False`，普通路径不触发默认 Compression；
-- P0/P1/P2 全部测试继续通过；
+- P0/P1/P2/P3 全部测试继续通过；
 - 不修改或重启 `chris-avatar`。
