@@ -3,11 +3,27 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository has completed **P2: SQLite and Task State**. The plugin now
-persists profile-scoped Tasks, Events, Checkpoints, Context Segments, and
-Session Active Pointers. It supports pausing unfinished work, natural-language
-search, and cross-session resume. Provider Context Rotation and Emergency
-Compression execution remain disabled until their later implementation phases.
+The repository has completed **P3: Runtime Status and Token Observation**. The
+plugin persists profile-scoped task state and now appends one request-local
+Runtime Status before every Provider Request. The status reports the current
+rough prompt estimate, latest real Provider usage when available, the active
+model policy, and the durable Task/Segment pointer. Provider Context Rotation
+and Emergency Compression execution remain disabled until their later phases.
+
+## Runtime observation
+
+`ContextHandoffEngine.select_context()` preserves the assembled request prefix
+and appends one ephemeral `user` message at the tail. It uses Hermes'
+`estimate_messages_tokens_rough()` for the current message estimate and never
+writes Runtime Status into conversation history, the Session database, or the
+plugin Event Log. Repeated selection replaces a prior generated tail status so
+a request contains at most one current status.
+
+`update_from_response()` normalizes both Hermes legacy and canonical Usage
+fields. Missing Usage is shown as `unavailable`; it is not represented as a
+real zero measurement. Model switches immediately re-resolve and display the
+new policy and Context Limit. Unmatched or invalid policies remain
+observation-only and never gain an inferred threshold.
 
 ## Policy configuration
 

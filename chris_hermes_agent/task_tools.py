@@ -369,6 +369,12 @@ class TaskToolHandlers:
 
 _DEFAULT_HANDLERS = TaskToolHandlers()
 
+
+def get_default_repository() -> TaskRepository:
+    """Share the profile-scoped repository with the active ContextEngine."""
+    return _DEFAULT_HANDLERS.repository
+
+
 TASK_TOOL_REGISTRATIONS: tuple[tuple[str, dict[str, Any], Callable[..., str]], ...] = (
     (
         TASK_STATE_MANAGE_SCHEMA["name"],

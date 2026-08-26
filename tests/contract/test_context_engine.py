@@ -68,7 +68,7 @@ def test_p0_compress_is_a_strict_passthrough() -> None:
     assert result is messages
 
 
-def test_p0_context_selection_is_disabled() -> None:
+def test_p3_context_selection_appends_request_only_runtime_status() -> None:
     engine = _engine()
     request = [{"role": "user", "content": "unchanged"}]
 
@@ -79,7 +79,11 @@ def test_p0_context_selection_is_disabled() -> None:
         budget_tokens=200_000,
     )
 
-    assert selected is None
+    assert selected is not None
+    assert selected[:-1] == request
+    assert selected[-1]["role"] == "user"
+    assert str(selected[-1]["content"]).startswith("[Runtime Status]")
+    assert request == [{"role": "user", "content": "unchanged"}]
 
 
 def test_engine_exposes_only_handoff_context_tool() -> None:

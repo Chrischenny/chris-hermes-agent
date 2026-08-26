@@ -548,8 +548,8 @@ Skill 负责：
 | P0 工程骨架与契约测试 | 已完成 | 已提交并通过全部验证 |
 | P1 配置与 Policy Resolver | 已完成 | 已实现配置注入、校验、匹配和模型切换 |
 | P2 SQLite 与 Task State | 已完成 | 已实现持久化、任务工具、暂存、搜索和恢复 |
-| P3 Runtime Status 与 Token 观测 | 下一阶段 | 尚未开始 |
-| P4 Context Rotation | 未开始 | 依赖 P2、P3 |
+| P3 Runtime Status 与 Token 观测 | 已完成 | 已实现请求级状态、估算/真实 Usage 和 Active Pointer 观测 |
+| P4 Context Rotation | 下一阶段 | 依赖已满足，尚未开始 |
 | P5 Skill、SOUL 与任务隔离 | 未开始 | 依赖 P2、P4 |
 | P6 Emergency Fallback | 未开始 | 依赖 P1、P3、P4 |
 | P7 集成测试与上线 | 未开始 | 依赖全部开发阶段 |
@@ -610,12 +610,22 @@ Event，不包含大段 Tool Trace。62 个测试通过，总覆盖率 87.24%，
 
 ### P3：Runtime Status 与 Token 观测
 
+状态：**已完成（2026-08-26）**
+
 - 实现真实 Usage 更新；
 - 实现当前 Request Token 估算；
 - 实现 Runtime Status；
 - 验证消息临时性和 Prefix 稳定性。
 
 完成标准：一个 Tool Loop 内每次 Provider Request 都能看到最新状态，Session History 中没有 Runtime Status。
+
+完成证据：使用 Hermes `estimate_messages_tokens_rough()` 计算包含最新 Runtime
+Status 的自洽 Request 估算；`update_from_response()` 同时兼容 legacy/canonical
+Usage 字段，并显式区分真实零值与无 Usage。`select_context()` 只创建请求列表浅
+拷贝并在稳定 Prefix 尾部追加一条状态，重复调用不会累积状态；模型切换、Retry、
+Tool Loop、无 Usage、无 Policy、无效 Policy 和 Session Active Task/Segment 均有
+测试覆盖。74 个测试通过，总覆盖率 87.66%，Ruff、Mypy strict、构建和 Plugin
+Doctor 均通过。
 
 ### P4：Context Rotation
 
