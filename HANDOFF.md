@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-26
 >
-> 交接边界：P1 已完成，P2 尚未开始
+> 交接边界：P2 已完成，P3 尚未开始
 >
-> 下一阶段：P2 SQLite 与 Task State
+> 下一阶段：P3 Runtime Status 与 Token 观测
 
 ## 1. Task
 
@@ -13,6 +13,7 @@
 - 分支：`main`
 - P0 实现提交：`25f2261 feat: scaffold Hermes context handoff plugin`
 - P1 实现提交：`a3993fe feat: add model handoff policy resolver`
+- P2 实现提交：`1b30c38 feat: persist task lifecycle and resume state`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -96,6 +97,19 @@ Task Tools 和 bundled Skill；拆成两个插件会增加版本、安装和数�
 closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-5.6-sol` 的真实
 甜区和 Emergency 阈值将在上线前由用户配置，不阻塞后续开发。
 
+### 4.4 Task 暂存、搜索和恢复
+
+- Task 属于当前 Profile，可跨 Hermes Session 搜索和恢复；
+- 新任务开始时，尚未完成的当前任务必须先有有效 Checkpoint，然后默认进入
+  `paused`；
+- Task 状态为 active、paused、blocked、completed、cancelled；
+- 搜索文档包含 Task State、Checkpoint 和选择性 Decision Event，不包含大段
+  Tool Trace；
+- 优先使用 FTS5 trigram 支持中文子串，运行环境不支持时回退到规范化字符串
+  匹配；
+- P2 Resume 只更新持久化 Active Pointer，并明确返回
+  `context_rotation_applied: false`；真正的 Provider Context Rotation 在 P4。
+
 ## 5. Completed
 
 P0 已完成：
@@ -127,9 +141,25 @@ P1 已完成：
 - 保持 Compression、Task Tools 和 Context Rotation 安全关闭；
 - 更新 README 和开发计划并提交 P1。
 
+P2 已完成：
+
+- 将版本更新到 `0.2.0`；
+- 使用 Hermes `plugins.plugin_storage.plugin_db()` 在首次 Task Tool 调用时惰性
+  创建当前 Profile 数据库；
+- 建立 Schema v1、版本检查、WAL、外键、busy timeout 和幂等迁移；
+- 实现 Task、Event、Checkpoint、Context Segment 和 Session Context State；
+- 实现事务回滚、Task/Session 乐观锁和并发更新保护；
+- 实现 Checkpoint 完整字段、非空 Next Actions、SHA-256 Checksum 和损坏拒绝；
+- 实现 active/paused/blocked/completed/cancelled 状态；
+- 新任务默认暂存未完成的当前任务；
+- 实现中文自然语言检索、精简候选和跨 Session Resume；
+- 将三个 Task Tool 从 `phase_not_ready` 切换为真实 Handler；
+- 调整 `handoff_context` 契约，区分目标 Task 与切换前 Active Task/Segment；
+- 更新方案、README 和开发计划并提交 P2。
+
 ## 6. Current State
 
-P1 实现已能解析 Policy，但执行面仍处于安全关闭状态：
+P2 已启用 Task 持久化，Context 执行面仍处于安全关闭状态：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
 - `threshold_tokens` 只反映已匹配且有效的普通 Handoff 起点；
@@ -137,11 +167,13 @@ P1 实现已能解析 Policy，但执行面仍处于安全关闭状态：
 - `ContextHandoffEngine.should_compress()` 恒为 `False`；
 - `compress()` 严格原样返回输入消息列表；
 - 没有覆盖 `select_context()`，因此 Hermes 跳过 Context 选择 Hook；
-- 三个 Task Tool 均返回结构化 `phase_not_ready`；
+- `task_state_manage`、`task_event_append`、`checkpoint_create` 已可用；
+- 数据库只在首次 Task Tool 调用时创建，路径为当前 Profile 的
+  `plugin-data/chris-hermes-agent/data.db`；
+- Resume 会更新持久化 Task/Segment/Session Pointer，但明确报告 Provider
+  Context 尚未 Rotation；
 - `handoff_context` 返回结构化 `phase_not_ready`；
-- 不会创建数据库；
-- 不会写 Task State；
-- 不会切换 Context；
+- 不会切换 Provider Context；
 - 不会修改 Hermes Session；
 - 未安装到 `chris-avatar`。
 
@@ -154,19 +186,27 @@ P1 实现已能解析 Policy，但执行面仍处于安全关闭状态：
 - `chris_hermes_agent/models.py`
 - `chris_hermes_agent/errors.py`
 - `chris_hermes_agent/policy.py`
+- `chris_hermes_agent/task_models.py`
+- `chris_hermes_agent/migrations.py`
+- `chris_hermes_agent/store.py`
+- `chris_hermes_agent/task_service.py`
+- `chris_hermes_agent/checkpoint_service.py`
 - `chris_hermes_agent/task_tools.py`
 - `skills/context-handoff/SKILL.md`
 - `tests/contract/`
 - `tests/unit/test_policy.py`
+- `tests/unit/test_store.py`
+- `tests/unit/test_task_service.py`
+- `tests/integration/test_task_tools.py`
 - `tests/integration/test_plugin_doctor.py`
 - `pyproject.toml`
 
 ## 7. Verification Evidence
 
-P1 最终验证结果：
+P2 最终验证结果：
 
-- 40 个单元/契约/集成测试全部通过；
-- 总覆盖率 93.18%，超过 80% 门槛；
+- 62 个单元/契约/集成测试全部通过；
+- 总覆盖率 87.24%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -189,10 +229,11 @@ HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 
 ## 8. Known Issues / Expected Limitations
 
-- Task Tools 和 Handoff Tool 目前有意不可用，不是缺陷；
+- Handoff Tool 目前有意不可用，不是缺陷；
 - Policy 数值尚未写入 `chris-avatar`，这是上线前的用户配置项；
-- Runtime Status 尚未实现；
-- SQLite 和 Task State 尚未实现；
+- Runtime Status 和当前 Request Token 估算尚未实现；
+- P2 Task Resume 尚未连接 Provider Context Rotation；
+- 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
 - Context Rotation 尚未实现；
 - Emergency Fallback 尚未实现；
 - `chris-avatar` 仍使用 Hermes 默认 ContextEngine；
@@ -221,34 +262,35 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P2 开始，建议严格按以下顺序：
+新会话从 P3 开始，建议严格按以下顺序：
 
-1. 阅读本交接文件和开发计划 P2；
+1. 阅读本交接文件和开发计划 P3；
 2. 检查 `git status`，确认 `main` 与 `origin/main` 同步；
-3. 使用 `documentation-lookup` 核对 Hermes `ctx.plugin_db()` 的连接、路径、
-   生命周期和并发契约，以及 Tool Handler 可获得的 Session 标识；
-4. 使用 `tdd-workflow`，先编写 Migration、Repository 和 Task Service 测试；
-5. 定义 Task、Event、Checkpoint、Context Segment 和 Session Context State
-   的不可变数据模型；
-6. 实现版本化 SQLite Schema、迁移、外键、WAL 和连接初始化；
-7. 实现 Task/Event/Checkpoint/Segment Repository、事务回滚和乐观锁；
-8. 实现 Task 创建、查询、更新、父子关系、Event 追加和 Checkpoint 校验；
-9. 将 `task_state_manage`、`task_event_append`、`checkpoint_create` 从
-   `phase_not_ready` 切换为真实 Service Handler；
-10. 测试重启恢复、并发写入、事务失败和损坏输入；
-11. 运行完整 P0/P1 回归、覆盖率、类型检查、构建和 Plugin Doctor；
-12. 更新计划进度，提交并推送 P2。
+3. 使用 `documentation-lookup` 核对 Hermes `select_context()` 的每 Request
+   调用顺序、Usage 规范化字段和可复用 Token 估算接口；
+4. 使用 `tdd-workflow`，先编写 Token Usage 和 Runtime Status 测试；
+5. 实现当前 Request `estimated_prompt_tokens` 和上一 Response
+   `last_prompt_tokens`；
+6. 覆盖 `select_context()`，只对本次 Request 的浅拷贝在尾部追加一条 Runtime
+   Status；
+7. Runtime Status 包含模型、Context Limit、估算/真实 Token、Policy 来源与
+   阈值、Active Task 和 Segment；
+8. 将 ContextEngine Session 生命周期接到 P2 Repository 的 Active Pointer；
+9. 测试 Tool Loop、Retry、模型切换、无 Usage、无 Policy、Prefix 稳定和
+   Runtime Status 不进入 Hermes Session History；
+10. 运行完整 P0/P1/P2 回归、覆盖率、类型检查、构建和 Plugin Doctor；
+11. 更新计划进度，提交并推送 P3。
 
-## 11. P2 Acceptance Criteria
+## 11. P3 Acceptance Criteria
 
-- SQLite 由 Hermes `plugin_db()` 提供，不写入插件安装目录；
-- Schema 可从空数据库迁移到当前版本，重复初始化幂等；
-- Task、Event、Checkpoint、Segment 和 Session Context State 可持久化查询；
-- Task 支持父子关系和明确的状态转换；
-- Event 只追加且可按 Task 顺序追溯；
-- Checkpoint 结构完整且 `Next Actions` 非空；
-- Session Active Pointer 使用版本字段进行乐观锁；
-- 事务失败完整回滚，并发写入不会造成重复 Handoff 前置状态；
-- Gateway 进程重建 Repository 后可以恢复 Active Task/Segment；
-- P0/P1 全部测试继续通过；
+- 每次 Provider Request 都包含最多一条最新 Runtime Status；
+- Runtime Status 只存在于 Request 浅拷贝，绝不写入 Hermes Session History；
+- 不修改 System Prompt，不重新排列或改写稳定 Prefix；
+- 同时报告当前 Request 估算 Prompt Token 和上一 Response 真实 Usage；
+- Provider 不返回 Usage 时保持可诊断状态，不伪造真实值；
+- 无 Policy 时只报告模型、Context Limit 和使用事实，不猜测阈值；
+- 模型切换后立即显示新 Policy 和 Context Limit；
+- Runtime Status 能恢复当前 Active Task 和 Segment；
+- `should_compress()` 继续恒为 `False`，普通路径不触发默认 Compression；
+- P0/P1/P2 全部测试继续通过；
 - 不修改或重启 `chris-avatar`。
