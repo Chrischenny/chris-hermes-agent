@@ -1,0 +1,10 @@
+name: chris-hermes-agent
+version: 0.1.0
+description: "Agent-managed task state, checkpoints, and context handoff for long-running Hermes tasks."
+author: Chrischenny
+kind: standalone
+skill_namespace: chris-hermes-agent
+provides_tools:
+  - task_state_manage
+  - task_event_append
+  - checkpoint_create

@@ -513,12 +513,17 @@ Skill 负责：
 
 ### P0：工程骨架与契约测试
 
+状态：**已完成（2026-08-26）**
+
 - 创建 `plugin.yaml`、插件入口和 Python 包；
 - 注册 ContextEngine、Task Tools 和 Skill；
 - 建立 pytest、lint 和类型检查；
 - 为 Hermes ABC 和工具 Schema 编写契约测试。
 
 完成标准：插件能被 `chris-avatar` 发现，但尚不启用 Context Rotation。
+
+完成证据：Hermes Plugin Doctor 已通过隔离环境下的运行时发现、Manifest
+解析、插件导入和注册验证；16 个契约/集成测试通过，代码覆盖率 100%。
 
 ### P1：配置与 Policy Resolver
 
