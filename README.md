@@ -3,11 +3,11 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository has completed **P1: configuration and Policy Resolver**. The
-plugin now reads profile-scoped handoff settings, validates model policies, and
-re-resolves them whenever Hermes changes models. Task persistence, Context
-Rotation, and Emergency Compression execution remain disabled until their
-implementation phases are complete.
+The repository has completed **P2: SQLite and Task State**. The plugin now
+persists profile-scoped Tasks, Events, Checkpoints, Context Segments, and
+Session Active Pointers. It supports pausing unfinished work, natural-language
+search, and cross-session resume. Provider Context Rotation and Emergency
+Compression execution remain disabled until their later implementation phases.
 
 ## Policy configuration
 
@@ -32,6 +32,25 @@ plugins:
 
 No model threshold is supplied by the plugin. Invalid or unmatched policies
 produce diagnostic state and keep Handoff and Emergency behavior disabled.
+
+## Task lifecycle
+
+`task_state_manage` supports `create`, `get`, `update`, `pause`, `search`,
+`list`, `resume`, `block`, `complete`, and `cancel`. Starting a new task in a
+busy Session requires a valid Checkpoint and pauses the unfinished task by
+default. Task search covers state, selected decision events, Checkpoints,
+artifacts, aliases, tags, and Next Actions without indexing bulk Tool Trace.
+
+Runtime data is created lazily through Hermes `plugin_db()` at:
+
+```text
+<HERMES_HOME>/plugin-data/chris-hermes-agent/data.db
+```
+
+SQLite runs with WAL, foreign keys, a busy timeout, versioned migrations, and
+optimistic locks on Task and Session state. Resume updates durable state and
+returns `context_rotation_applied: false` until P4 connects the Provider
+Context switch.
 
 ## Development
 

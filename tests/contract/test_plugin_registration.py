@@ -123,20 +123,15 @@ def test_registered_task_schemas_are_strict_and_self_named() -> None:
         assert tool.schema["parameters"]["additionalProperties"] is False
 
 
-def test_p0_task_handlers_fail_closed_with_structured_json() -> None:
+def test_p2_task_handlers_require_hermes_runtime_session() -> None:
     module = _load_native_entrypoint()
     context = RecordingPluginContext()
     module.register(context)
 
     for tool in context.tools:
         result = json.loads(tool.handler({}))
-        assert result == {
-            "ok": False,
-            "error": {
-                "code": "phase_not_ready",
-                "message": f"{tool.name} is registered but disabled until P2",
-            },
-        }
+        assert result["ok"] is False
+        assert result["error"]["code"] == "missing_session_id"
 
 
 def test_registration_injects_private_handoff_config_into_engine() -> None:

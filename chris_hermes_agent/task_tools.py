@@ -1,26 +1,58 @@
-"""Task-layer tool contracts registered by the Hermes plugin."""
+"""Task-layer tool schemas and fail-closed Hermes handlers."""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import sqlite3
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+
+from .checkpoint_service import CheckpointService
+from .migrations import initialize_database
+from .store import TaskRepository
+from .task_models import EventType, TaskStatus
+from .task_service import TaskService, TaskServiceError
 
 TASK_STATE_MANAGE_SCHEMA: dict[str, Any] = {
     "name": "task_state_manage",
     "description": (
-        "Create, read, update, or finalize durable state for the active long-running "
-        "task. Registered for contract stability but disabled until P2."
+        "Create, inspect, update, pause, search, resume, block, complete, or "
+        "cancel durable long-running tasks. Starting a new task pauses an "
+        "unfinished active task only after a valid checkpoint exists."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "get", "update", "finalize"],
+                "enum": [
+                    "create",
+                    "get",
+                    "update",
+                    "pause",
+                    "search",
+                    "list",
+                    "resume",
+                    "block",
+                    "complete",
+                    "cancel",
+                    "finalize",
+                ],
             },
             "task_id": {"type": "string", "minLength": 1},
             "parent_task_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 0},
+            "query": {"type": "string"},
+            "statuses": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [status.value for status in TaskStatus],
+                },
+                "uniqueItems": True,
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             "state": {"type": "object"},
         },
         "required": ["action"],
@@ -30,15 +62,15 @@ TASK_STATE_MANAGE_SCHEMA: dict[str, Any] = {
 
 TASK_EVENT_APPEND_SCHEMA: dict[str, Any] = {
     "name": "task_event_append",
-    "description": (
-        "Append a traceable decision or execution event to a task. Registered "
-        "for contract stability but disabled until P2."
-    ),
+    "description": "Append a supported traceable decision or execution event.",
     "parameters": {
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "minLength": 1},
-            "event_type": {"type": "string", "minLength": 1},
+            "event_type": {
+                "type": "string",
+                "enum": [event_type.value for event_type in EventType],
+            },
             "payload": {"type": "object"},
         },
         "required": ["task_id", "event_type", "payload"],
@@ -49,8 +81,8 @@ TASK_EVENT_APPEND_SCHEMA: dict[str, Any] = {
 CHECKPOINT_CREATE_SCHEMA: dict[str, Any] = {
     "name": "checkpoint_create",
     "description": (
-        "Validate and persist a task checkpoint for a later context handoff. "
-        "Registered for contract stability but disabled until P2."
+        "Validate and persist a complete task checkpoint with non-empty Next "
+        "Actions for later pause, resume, or context handoff."
     ),
     "parameters": {
         "type": "object",
@@ -64,31 +96,293 @@ CHECKPOINT_CREATE_SCHEMA: dict[str, Any] = {
 }
 
 
-def _disabled_handler(tool_name: str) -> Callable[..., str]:
-    def handle(args: dict[str, Any], **kwargs: Any) -> str:
-        del args, kwargs
-        return json.dumps(
-            {
-                "ok": False,
-                "error": {
-                    "code": "phase_not_ready",
-                    "message": f"{tool_name} is registered but disabled until P2",
-                },
-            },
-            ensure_ascii=False,
-            sort_keys=True,
+def _success(data: Mapping[str, Any]) -> str:
+    return json.dumps(
+        {"ok": True, "data": dict(data)},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _error(code: str, message: str) -> str:
+    return json.dumps(
+        {"ok": False, "error": {"code": code, "message": message}},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _default_repository() -> TaskRepository:
+    from plugins.plugin_storage import plugin_db  # type: ignore[import-not-found]
+
+    connection = plugin_db("chris-hermes-agent")
+    initialize_database(connection)
+    return TaskRepository(connection)
+
+
+class TaskToolHandlers:
+    """Hermes JSON adapters over one lazily-created repository."""
+
+    def __init__(self, repository: TaskRepository | None = None) -> None:
+        self._repository = repository
+        self._repository_lock = threading.Lock()
+
+    @property
+    def repository(self) -> TaskRepository:
+        if self._repository is None:
+            with self._repository_lock:
+                if self._repository is None:
+                    self._repository = _default_repository()
+        return self._repository
+
+    def task_state_manage(self, args: dict[str, Any], **kwargs: Any) -> str:
+        session_id = kwargs.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return _error(
+                "missing_session_id",
+                "Hermes runtime session_id is required for task state changes.",
+            )
+        action = args.get("action")
+        action_schema = TASK_STATE_MANAGE_SCHEMA["parameters"]["properties"]["action"]
+        if action not in action_schema["enum"]:
+            return _error("invalid_action", f"Unsupported task action: {action!r}")
+        try:
+            return self._dispatch_task_action(str(action), args, session_id)
+        except TaskServiceError as exc:
+            return _error(exc.code, exc.message)
+        except (KeyError, TypeError, ValueError) as exc:
+            return _error("invalid_argument", str(exc))
+        except sqlite3.Error as exc:
+            return _error("storage_error", f"SQLite operation failed: {exc}")
+        except Exception as exc:  # pragma: no cover - defensive host boundary
+            return _error(
+                "internal_error", f"Task operation failed: {type(exc).__name__}"
+            )
+
+    def task_event_append(self, args: dict[str, Any], **kwargs: Any) -> str:
+        session_id = kwargs.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return _error(
+                "missing_session_id", "Hermes runtime session_id is required."
+            )
+        try:
+            task_id = self._text_arg(args, "task_id")
+            payload = args.get("payload")
+            if not isinstance(payload, Mapping):
+                raise TaskServiceError("invalid_argument", "payload must be an object.")
+            raw_event_type = args.get("event_type")
+            if not isinstance(raw_event_type, str):
+                raise TaskServiceError(
+                    "invalid_event_type",
+                    f"Unsupported event type: {raw_event_type!r}.",
+                )
+            try:
+                event_type = EventType(raw_event_type)
+            except ValueError as exc:
+                raise TaskServiceError(
+                    "invalid_event_type",
+                    f"Unsupported event type: {raw_event_type!r}.",
+                ) from exc
+            event = TaskService(self.repository).append_event(
+                task_id,
+                session_id,
+                event_type,
+                payload,
+            )
+            return _success({"event": event.to_json_dict()})
+        except TaskServiceError as exc:
+            return _error(exc.code, exc.message)
+        except sqlite3.Error as exc:
+            return _error("storage_error", f"SQLite operation failed: {exc}")
+
+    def checkpoint_create(self, args: dict[str, Any], **kwargs: Any) -> str:
+        session_id = kwargs.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return _error(
+                "missing_session_id", "Hermes runtime session_id is required."
+            )
+        try:
+            task_id = self._text_arg(args, "task_id")
+            checkpoint = args.get("checkpoint")
+            if not isinstance(checkpoint, Mapping):
+                raise TaskServiceError(
+                    "invalid_argument", "checkpoint must be an object."
+                )
+            result = CheckpointService(self.repository).create_checkpoint(
+                task_id,
+                session_id,
+                checkpoint,
+            )
+            return _success({"checkpoint": result.to_json_dict()})
+        except TaskServiceError as exc:
+            return _error(exc.code, exc.message)
+        except sqlite3.Error as exc:
+            return _error("storage_error", f"SQLite operation failed: {exc}")
+
+    def _dispatch_task_action(
+        self,
+        action: str,
+        args: dict[str, Any],
+        session_id: str,
+    ) -> str:
+        service = TaskService(self.repository)
+        if action == "create":
+            state = self._state_arg(args)
+            title = self._state_text(state, "title")
+            goal = self._state_text(state, "goal")
+            remaining_state = dict(state)
+            remaining_state.pop("title", None)
+            remaining_state.pop("goal", None)
+            activation = service.create_task(
+                session_id,
+                title,
+                goal,
+                remaining_state,
+                parent_task_id=args.get("parent_task_id"),
+                task_id=args.get("task_id"),
+            )
+            return _success(activation.to_json_dict())
+        if action == "get":
+            task_id = args.get("task_id")
+            task = (
+                service.get_task(self._text_arg(args, "task_id"))
+                if task_id is not None
+                else service.get_active_task(session_id)
+            )
+            return _success({"task": task.to_json_dict() if task is not None else None})
+        if action == "update":
+            task = service.update_task(
+                self._text_arg(args, "task_id"),
+                session_id,
+                expected_version=self._version_arg(args),
+                changes=self._state_arg(args),
+            )
+            return _success({"task": task.to_json_dict()})
+        if action == "pause":
+            task = service.pause_task(
+                self._text_arg(args, "task_id"),
+                session_id,
+                expected_version=self._version_arg(args),
+            )
+            return _success({"task": task.to_json_dict()})
+        if action == "resume":
+            activation = service.resume_task(
+                self._text_arg(args, "task_id"),
+                session_id,
+                expected_version=self._version_arg(args),
+            )
+            data = activation.to_json_dict()
+            data["context_rotation_applied"] = False
+            data["context_rotation_phase"] = "P4"
+            return _success(data)
+        if action == "search":
+            results = service.search_tasks(
+                query=str(args.get("query") or ""),
+                statuses=self._status_args(
+                    args,
+                    default=(TaskStatus.PAUSED, TaskStatus.BLOCKED),
+                ),
+                limit=self._limit_arg(args),
+            )
+            return _success(
+                {"candidates": [result.to_json_dict() for result in results]}
+            )
+        if action == "list":
+            tasks = service.list_tasks(
+                statuses=self._status_args(args, default=()),
+                limit=self._limit_arg(args),
+            )
+            return _success({"tasks": [task.to_json_dict() for task in tasks]})
+        status_by_action = {
+            "block": TaskStatus.BLOCKED,
+            "complete": TaskStatus.COMPLETED,
+            "finalize": TaskStatus.COMPLETED,
+            "cancel": TaskStatus.CANCELLED,
+        }
+        task = service.transition_task(
+            self._text_arg(args, "task_id"),
+            session_id,
+            expected_version=self._version_arg(args),
+            status=status_by_action[action],
         )
+        return _success({"task": task.to_json_dict()})
 
-    return handle
+    @staticmethod
+    def _state_arg(args: Mapping[str, Any]) -> Mapping[str, object]:
+        state = args.get("state")
+        if not isinstance(state, Mapping):
+            raise TaskServiceError("invalid_argument", "state must be an object.")
+        return state
 
+    @staticmethod
+    def _state_text(state: Mapping[str, object], key: str) -> str:
+        value = state.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise TaskServiceError(
+                "invalid_argument", f"state.{key} must be a non-empty string."
+            )
+        return value
+
+    @staticmethod
+    def _text_arg(args: Mapping[str, Any], key: str) -> str:
+        value = args.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise TaskServiceError(
+                "invalid_argument", f"{key} must be a non-empty string."
+            )
+        return value
+
+    @staticmethod
+    def _version_arg(args: Mapping[str, Any]) -> int:
+        value = args.get("expected_version")
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise TaskServiceError(
+                "invalid_argument", "expected_version must be a non-negative integer."
+            )
+        return value
+
+    @staticmethod
+    def _limit_arg(args: Mapping[str, Any]) -> int:
+        value = args.get("limit", 10)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TaskServiceError("invalid_limit", "limit must be an integer.")
+        return value
+
+    @staticmethod
+    def _status_args(
+        args: Mapping[str, Any],
+        *,
+        default: Sequence[TaskStatus],
+    ) -> tuple[TaskStatus, ...]:
+        raw = args.get("statuses")
+        if raw is None:
+            return tuple(default)
+        if not isinstance(raw, list):
+            raise TaskServiceError("invalid_status", "statuses must be an array.")
+        try:
+            return tuple(TaskStatus(value) for value in raw)
+        except (TypeError, ValueError) as exc:
+            raise TaskServiceError(
+                "invalid_status", "statuses contains an unsupported value."
+            ) from exc
+
+
+_DEFAULT_HANDLERS = TaskToolHandlers()
 
 TASK_TOOL_REGISTRATIONS: tuple[tuple[str, dict[str, Any], Callable[..., str]], ...] = (
-    tuple(
-        (schema["name"], schema, _disabled_handler(schema["name"]))
-        for schema in (
-            TASK_STATE_MANAGE_SCHEMA,
-            TASK_EVENT_APPEND_SCHEMA,
-            CHECKPOINT_CREATE_SCHEMA,
-        )
-    )
+    (
+        TASK_STATE_MANAGE_SCHEMA["name"],
+        TASK_STATE_MANAGE_SCHEMA,
+        _DEFAULT_HANDLERS.task_state_manage,
+    ),
+    (
+        TASK_EVENT_APPEND_SCHEMA["name"],
+        TASK_EVENT_APPEND_SCHEMA,
+        _DEFAULT_HANDLERS.task_event_append,
+    ),
+    (
+        CHECKPOINT_CREATE_SCHEMA["name"],
+        CHECKPOINT_CREATE_SCHEMA,
+        _DEFAULT_HANDLERS.checkpoint_create,
+    ),
 )

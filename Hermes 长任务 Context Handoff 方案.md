@@ -372,6 +372,16 @@ Impact:
 ```text
 TASK_CREATED
 
+TASK_PAUSED
+
+TASK_RESUMED
+
+TASK_BLOCKED
+
+TASK_COMPLETED
+
+TASK_CANCELLED
+
 GOAL_CHANGED
 
 CONSTRAINT_ADDED
@@ -764,9 +774,11 @@ sub_task
 Agent应该：
 
 ```text
-Finalize Current Task State
+Update Current Task State
         ↓
 Checkpoint
+        ↓
+TASK_PAUSED
         ↓
 Create New Task
         ↓
@@ -787,6 +799,34 @@ Hermes Runtime / Tools
 ```
 
 从而避免项目和任务之间互相污染。
+
+当前任务尚未完成时默认标记为 `paused`，而不是 `completed`。只有目标已经满足
+时才结束任务；等待外部条件使用 `blocked`，用户明确放弃时使用 `cancelled`。
+
+### 暂存任务的搜索与恢复
+
+Task 属于当前 Profile，而不是被限制在创建它的 Hermes Session。Task 保存创建
+Session 和最近活动 Session，每次实际执行所在 Session 由 Context Segment
+记录，因此后续新 Session 也能恢复旧任务。
+
+用户可以使用自然语言表达恢复意图，例如“继续之前那个 Hermes Policy 任务”。
+Agent 先搜索 Task State、Checkpoint、Decision、Artifact、标签和 `Next Actions`
+形成的搜索文档，不展开完整 Tool Trace。
+
+```text
+结构化过滤（paused / blocked / 时间 / 父任务）
+        ↓
+SQLite FTS5 trigram / 规范化字符串回退
+        ↓
+按相关度、最近活动时间和状态排序
+        ↓
+返回简短候选摘要
+```
+
+唯一且明确的候选可以恢复；多个相近候选必须请用户确认。恢复时先暂存当前
+未完成任务，再原子切换 Active Task，记录 `TASK_RESUMED`，创建目标 Task 的新
+Context Segment，并从最新有效 Checkpoint 的 `Next Actions` 继续。完整旧历史
+仍可追溯，但不会重新注入大量 Shell、File、Git 和搜索输出。
 
 ---
 

@@ -92,8 +92,9 @@ def test_engine_exposes_only_handoff_context_tool() -> None:
     assert set(schemas[0]["parameters"]["required"]) == {
         "checkpoint_reference",
         "handoff_reason",
-        "expected_task_id",
-        "expected_segment_id",
+        "target_task_id",
+        "expected_active_task_id",
+        "expected_active_segment_id",
     }
 
 
@@ -106,8 +107,9 @@ def test_handoff_tool_is_safely_disabled_during_p0() -> None:
             {
                 "checkpoint_reference": "checkpoint-1",
                 "handoff_reason": "test",
-                "expected_task_id": "task-1",
-                "expected_segment_id": "segment-1",
+                "target_task_id": "task-1",
+                "expected_active_task_id": "task-1",
+                "expected_active_segment_id": "segment-1",
             },
         )
     )

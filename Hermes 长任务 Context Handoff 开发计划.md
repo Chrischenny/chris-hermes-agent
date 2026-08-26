@@ -291,7 +291,9 @@ Context segment: segment-002
 
 - `task_id`
 - `parent_task_id`
-- `session_id`
+- `title`
+- `created_session_id`
+- `last_session_id`
 - `goal`
 - `constraints`
 - `current_phase`
@@ -302,14 +304,28 @@ Context segment: segment-002
 - `decisions`
 - `artifacts`
 - `status`
+- `search_aliases`
+- `tags`
+- `paused_at`
+- `last_resumed_at`
+- `resume_count`
 - `created_at`
 - `updated_at`
+
+Task 状态为 `active`、`paused`、`blocked`、`completed` 或 `cancelled`。新任务
+开始时，尚未完成的当前任务默认进入 `paused`；Task 在当前 Profile 内可跨
+Hermes Session 搜索和恢复，实际执行 Session 由 Context Segment 记录。
 
 ### 8.2 Event
 
 支持以下事件类型：
 
 - `TASK_CREATED`
+- `TASK_PAUSED`
+- `TASK_RESUMED`
+- `TASK_BLOCKED`
+- `TASK_COMPLETED`
+- `TASK_CANCELLED`
 - `GOAL_CHANGED`
 - `CONSTRAINT_ADDED`
 - `DECISION_MADE`
@@ -375,16 +391,18 @@ Checkpoint 使用结构化字段存储，同时可以生成 Markdown 展示文�
 handoff_context(
     checkpoint_reference,
     handoff_reason,
-    expected_task_id,
-    expected_segment_id
+    target_task_id,
+    expected_active_task_id,
+    expected_active_segment_id
 )
 ```
 
 执行步骤：
 
-1. 校验 Checkpoint 存在且属于 `expected_task_id`；
+1. 校验 Checkpoint 存在且属于 `target_task_id`；
 2. 校验 Checkpoint 字段完整，`Next Actions` 非空；
-3. 校验当前 Task 和 Segment 未被并发切换；
+3. 使用 `expected_active_task_id` 和 `expected_active_segment_id` 校验当前
+   Active Pointer 未被并发切换；
 4. 在一个数据库事务中：
    - 关闭当前 Segment；
    - 创建下一 Segment；
@@ -446,14 +464,26 @@ Handoff Skill 在收到新的用户目标时分类：
 
 ### 完全新任务
 
-1. Finalize 当前 Task State；
-2. 创建当前任务 Checkpoint；
+1. 更新当前 Task State 并创建 Checkpoint；
+2. 当前目标尚未完成时记录 `TASK_PAUSED` 并标记为 `paused`；
 3. 创建新 Task；
 4. 调用 `handoff_context`；
 5. 新 Context 只继承 SOUL、Skills、长期 Memory 和 Hermes Runtime；
 6. 不继承旧任务 Tool Trace。
 
 识别信心不足且不同分类会造成明显状态差异时，Agent 必须向用户确认。
+
+### 暂存任务恢复
+
+- `task_state_manage(search)` 使用自然语言检索 `paused` / `blocked` Task；
+- 搜索索引包含 Goal、Phase、Decision、Artifact、标签和 Next Actions，但不包含
+  大量 Tool Trace；
+- SQLite 优先使用 FTS5 trigram，运行环境不支持时使用规范化字符串回退；
+- 唯一明确候选可以恢复，多个相近候选必须由用户确认；
+- 恢复前先为当前未完成任务创建 Checkpoint 并暂存；
+- 恢复目标 Task 时记录 `TASK_RESUMED`，增加 `resume_count`，更新
+  `last_session_id`，并从其最新有效 Checkpoint 创建新 Segment；
+- Task 可跨 Hermes Session 恢复，完整 Session/Segment 关系保持可追溯。
 
 ## 12. Emergency Fallback
 
@@ -517,8 +547,8 @@ Skill 负责：
 |---|---|---|
 | P0 工程骨架与契约测试 | 已完成 | 已提交并通过全部验证 |
 | P1 配置与 Policy Resolver | 已完成 | 已实现配置注入、校验、匹配和模型切换 |
-| P2 SQLite 与 Task State | 下一阶段 | 尚未开始 |
-| P3 Runtime Status 与 Token 观测 | 未开始 | 依赖 P1 |
+| P2 SQLite 与 Task State | 已完成 | 已实现持久化、任务工具、暂存、搜索和恢复 |
+| P3 Runtime Status 与 Token 观测 | 下一阶段 | 尚未开始 |
 | P4 Context Rotation | 未开始 | 依赖 P2、P3 |
 | P5 Skill、SOUL 与任务隔离 | 未开始 | 依赖 P2、P4 |
 | P6 Emergency Fallback | 未开始 | 依赖 P1、P3、P4 |
@@ -557,12 +587,26 @@ Policy Resolver 支持 ratio、absolute_tokens、精确模型、最长模型子�
 
 ### P2：SQLite 与 Task State
 
+状态：**已完成（2026-08-26）**
+
 - 建立 Schema 和迁移；
 - 实现 Task、Event、Checkpoint、Segment Repository；
 - 实现事务、乐观锁、WAL 和重启恢复；
-- 实现 Task 层工具。
+- 实现 Task 层工具；
+- 实现 active/paused/blocked/completed/cancelled 状态；
+- 实现 Profile 级自然语言搜索和跨 Session 暂存/恢复数据契约。
 
-完成标准：Task 状态可持久化、查询、恢复并追溯。
+完成标准：Task 状态可持久化、查询、暂存、自然语言检索、跨 Session 恢复并
+追溯；P2 只切换 Task Active Pointer，实际 Provider Context Rotation 仍在 P4
+接通。
+
+完成证据：使用 Hermes `plugins.plugin_storage.plugin_db()` 惰性创建 Profile
+数据库；Schema v1 包含 Task、Event、Checkpoint、Segment 和 Session Context
+State，启用 WAL、外键、busy timeout、事务和乐观锁；Task Tool 已支持创建、
+查询、更新、暂存、检索、恢复、阻塞、完成和取消。FTS5 trigram 支持中文子串
+检索并带字符串回退，搜索文档包含 Task State、Checkpoint 和选择性 Decision
+Event，不包含大段 Tool Trace。62 个测试通过，总覆盖率 87.24%，并发、回滚、
+重启恢复、Checksum、防降级迁移、构建和 Plugin Doctor 均通过。
 
 ### P3：Runtime Status 与 Token 观测
 
@@ -622,6 +666,7 @@ Policy Resolver 支持 ratio、absolute_tokens、精确模型、最长模型子�
 - Token 使用率计算；
 - Runtime Status 格式和临时性；
 - Task State 转换；
+- Task 暂存、搜索候选排序和跨 Session 恢复；
 - Checkpoint Schema；
 - Segment 父子关系；
 - Active Pointer 更新；

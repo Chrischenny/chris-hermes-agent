@@ -18,7 +18,7 @@ HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
     "description": (
         "Rotate the active model context to a previously persisted task "
         "checkpoint while keeping the current Hermes agent turn running. "
-        "The tool is registered but intentionally disabled during P0."
+        "The tool is registered but intentionally disabled until P4."
     ),
     "parameters": {
         "type": "object",
@@ -33,12 +33,17 @@ HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
                 "minLength": 1,
                 "description": "Why this is a stable context handoff point.",
             },
-            "expected_task_id": {
+            "target_task_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Task expected to own the checkpoint.",
+                "description": "Task that owns the target checkpoint.",
             },
-            "expected_segment_id": {
+            "expected_active_task_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Task expected to be active before rotation.",
+            },
+            "expected_active_segment_id": {
                 "type": "string",
                 "minLength": 1,
                 "description": "Active segment expected by the caller.",
@@ -47,8 +52,9 @@ HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
         "required": [
             "checkpoint_reference",
             "handoff_reason",
-            "expected_task_id",
-            "expected_segment_id",
+            "target_task_id",
+            "expected_active_task_id",
+            "expected_active_segment_id",
         ],
         "additionalProperties": False,
     },
@@ -64,11 +70,11 @@ def _error(code: str, message: str) -> str:
 
 
 class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
-    """P0-safe ContextEngine implementation.
+    """P2-safe ContextEngine with policy resolution and disabled rotation.
 
-    Context selection, persistence, and emergency behavior are implemented in
-    later phases. Until then this engine satisfies Hermes' host contract while
-    leaving every request and persisted transcript untouched.
+    Task persistence is owned by the Task layer. Context selection and
+    emergency behavior are implemented in later phases; until then this engine
+    leaves every request and persisted Hermes transcript untouched.
     """
 
     emit_automatic_compaction_status = False
@@ -155,7 +161,7 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         force: bool = False,
         memory_context: str = "",
     ) -> list[dict[str, Any]]:
-        """Return the exact input list; P0 must never mutate conversation state."""
+        """Return the exact input list until Emergency Fallback is implemented."""
         del current_tokens, focus_topic, force, memory_context
         return messages
 
