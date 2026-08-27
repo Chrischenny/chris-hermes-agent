@@ -3,12 +3,27 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository has completed **P3: Runtime Status and Token Observation**. The
-plugin persists profile-scoped task state and now appends one request-local
-Runtime Status before every Provider Request. The status reports the current
-rough prompt estimate, latest real Provider usage when available, the active
-model policy, and the durable Task/Segment pointer. Provider Context Rotation
-and Emergency Compression execution remain disabled until their later phases.
+The repository has completed **P4: Context Rotation**. The plugin persists
+profile-scoped task state, exposes an atomic `handoff_context` tool, and selects
+a checkpoint-based Context on the next Provider Request without ending the
+current Agent Turn. Emergency Compression remains disabled until its later
+phase.
+
+## Context rotation
+
+`handoff_context` validates the Checkpoint owner and checksum together with the
+caller's expected active Task/Segment. One SQLite transaction closes the old
+Segment, creates the new Segment, advances the Session pointer, and appends a
+`HANDOFF_COMPLETED` event. Concurrent and repeated calls fail closed instead of
+creating duplicate Segments or events.
+
+The following Provider Request keeps Hermes' assembled stable head, inserts a
+durable Task/Checkpoint Bootstrap, and retains only messages from the handoff
+assistant Tool Call onward. This preserves the triggering Tool Call/Result pair
+and subsequent Tool Loop while excluding the old Segment's bulk Tool Trace.
+Hermes Session history is not modified or deleted. A corrupt Checkpoint or
+invalid persisted cursor produces an isolated diagnostic Bootstrap rather than
+silently restoring archived trace.
 
 ## Runtime observation
 
@@ -65,8 +80,9 @@ Runtime data is created lazily through Hermes `plugin_db()` at:
 
 SQLite runs with WAL, foreign keys, a busy timeout, versioned migrations, and
 optimistic locks on Task and Session state. Resume updates durable state and
-returns `context_rotation_applied: false` until P4 connects the Provider
-Context switch.
+returns `context_rotation_applied: false`, `context_rotation_required: true`,
+and `next_required_action: call_handoff_context`; the explicit Handoff call
+then performs the request-level Context switch.
 
 ## Development
 

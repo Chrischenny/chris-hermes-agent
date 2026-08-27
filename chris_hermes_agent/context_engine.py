@@ -10,10 +10,16 @@ from typing import Any
 
 from agent.context_engine import ContextEngine
 
-from .context_builder import RuntimeStatus, append_runtime_status
+from .context_builder import (
+    RuntimeStatus,
+    append_runtime_status,
+    build_handoff_context,
+)
+from .handoff_service import HandoffService, HandoffServiceError
 from .models import PolicyResolution
 from .policy import PolicyResolver
 from .store import TaskRepository
+from .task_models import SessionContextState
 from .token_usage import ProviderTokenUsage
 
 logger = logging.getLogger(__name__)
@@ -22,8 +28,7 @@ HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
     "name": "handoff_context",
     "description": (
         "Rotate the active model context to a previously persisted task "
-        "checkpoint while keeping the current Hermes agent turn running. "
-        "The tool is registered but intentionally disabled until P4."
+        "checkpoint while keeping the current Hermes agent turn running."
     ),
     "parameters": {
         "type": "object",
@@ -74,11 +79,19 @@ def _error(code: str, message: str) -> str:
     )
 
 
-class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
-    """ContextEngine with P3 observation and disabled context rotation.
+def _success(data: dict[str, object]) -> str:
+    return json.dumps(
+        {"ok": True, "data": data},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
-    Task persistence remains owned by the Task layer. P3 appends request-local
-    status while context rotation and emergency behavior stay disabled.
+
+class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
+    """ContextEngine with request observation and atomic Context rotation.
+
+    Task persistence remains owned by the Task layer. P4 rotates durable
+    Segment pointers and selects a request-only checkpoint bootstrap.
     """
 
     emit_automatic_compaction_status = False
@@ -176,13 +189,50 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         budget_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         """Append one ephemeral status while preserving the stable prefix."""
-        del conversation_messages, incoming_message, budget_tokens
+        del incoming_message, budget_tokens
         if self._awaiting_usage:
             self._clear_usage()
-        active_task_id, active_segment_id = self._active_pointer()
+        repository, state = self._session_repository_state()
+        active_task_id = state.active_task_id if state is not None else None
+        active_segment_id = (
+            state.active_context_segment_id if state is not None else None
+        )
+        selected_base = request_messages
+        if (
+            repository is not None
+            and state is not None
+            and state.active_task_id is not None
+            and state.active_context_segment_id is not None
+        ):
+            segment = repository.get_segment(state.active_context_segment_id)
+            if segment is not None and segment.checkpoint_id is not None:
+                task = repository.get_task(state.active_task_id)
+                checkpoint = repository.get_checkpoint(segment.checkpoint_id)
+                conversation = conversation_messages or []
+                start_message_index = segment.start_message_index
+                diagnostic = None
+                if not 0 <= start_message_index <= len(conversation):
+                    diagnostic = "segment_cursor_invalid"
+                    start_message_index = len(conversation)
+                elif task is None:
+                    diagnostic = "task_not_found"
+                elif checkpoint is None:
+                    diagnostic = "checkpoint_not_found"
+                elif checkpoint.task_id != task.task_id:
+                    diagnostic = "checkpoint_task_mismatch"
+                elif not checkpoint.checksum_is_valid():
+                    diagnostic = "checkpoint_corrupt"
+                selected_base = build_handoff_context(
+                    request_messages,
+                    conversation_messages=conversation,
+                    start_message_index=start_message_index,
+                    task=task,
+                    checkpoint=checkpoint,
+                    diagnostic=diagnostic,
+                )
         resolution = self.policy_resolution
         selected, estimated = append_runtime_status(
-            request_messages,
+            selected_base,
             RuntimeStatus(
                 model=self.current_model or "unknown",
                 estimated_prompt_tokens=0,
@@ -241,12 +291,46 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         args: dict[str, Any],
         **kwargs: Any,
     ) -> str:
-        del args, kwargs
         if name == "handoff_context":
-            return _error(
-                "phase_not_ready",
-                "handoff_context is registered but disabled until P4",
-            )
+            if self._session_id is None:
+                return _error(
+                    "missing_session_id",
+                    "Hermes ContextEngine Session lifecycle is not initialized.",
+                )
+            messages = kwargs.get("messages")
+            if not isinstance(messages, list):
+                return _error(
+                    "missing_messages",
+                    "Hermes runtime messages are required for context handoff.",
+                )
+            triggering_index = self._find_handoff_trigger(messages)
+            if triggering_index is None:
+                return _error(
+                    "handoff_trigger_not_found",
+                    "The current message tail does not contain handoff_context.",
+                )
+            try:
+                result = HandoffService(self._get_repository()).rotate(
+                    session_id=self._session_id,
+                    checkpoint_reference=self._text_arg(args, "checkpoint_reference"),
+                    handoff_reason=self._text_arg(args, "handoff_reason"),
+                    target_task_id=self._text_arg(args, "target_task_id"),
+                    expected_active_task_id=self._text_arg(
+                        args, "expected_active_task_id"
+                    ),
+                    expected_active_segment_id=self._text_arg(
+                        args, "expected_active_segment_id"
+                    ),
+                    triggering_message_index=triggering_index,
+                    policy_snapshot=self._policy_snapshot(),
+                )
+                return _success(result.to_json_dict())
+            except HandoffServiceError as exc:
+                return _error(exc.code, exc.message)
+            except sqlite3.Error as exc:
+                return _error("storage_error", f"SQLite operation failed: {exc}")
+            except (KeyError, TypeError, ValueError) as exc:
+                return _error("invalid_argument", str(exc))
         return _error("unknown_tool", f"Unknown context engine tool: {name}")
 
     def _clear_usage(self) -> None:
@@ -257,22 +341,68 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         self.estimated_prompt_tokens = 0
         self._awaiting_usage = False
 
-    def _active_pointer(self) -> tuple[str | None, str | None]:
+    def _get_repository(self) -> TaskRepository:
+        repository = self._repository
+        if repository is None:
+            if self._repository_provider is None:
+                from .task_tools import get_default_repository
+
+                self._repository_provider = get_default_repository
+            repository = self._repository_provider()
+            self._repository = repository
+        return repository
+
+    def _session_repository_state(
+        self,
+    ) -> tuple[TaskRepository | None, SessionContextState | None]:
         if self._session_id is None:
             return None, None
         try:
-            repository = self._repository
-            if repository is None:
-                if self._repository_provider is None:
-                    from .task_tools import get_default_repository
-
-                    self._repository_provider = get_default_repository
-                repository = self._repository_provider()
-                self._repository = repository
+            repository = self._get_repository()
             state = repository.get_session_state(self._session_id)
         except sqlite3.Error as exc:
             logger.warning("Unable to read active Context pointer: %s", exc)
             return None, None
-        if state is None:
-            return None, None
-        return state.active_task_id, state.active_context_segment_id
+        return repository, state
+
+    def _policy_snapshot(self) -> str:
+        resolution = self.policy_resolution
+        return json.dumps(
+            {
+                "model": resolution.model,
+                "provider": resolution.provider,
+                "context_limit": resolution.context_limit,
+                "match_source": resolution.match_source,
+                "handoff_threshold_tokens": resolution.handoff_threshold_tokens,
+                "emergency_threshold_tokens": resolution.emergency_threshold_tokens,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    @staticmethod
+    def _find_handoff_trigger(messages: list[object]) -> int | None:
+        if not messages:
+            return None
+        index = len(messages) - 1
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return None
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return None
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if isinstance(function, dict) and function.get("name") == "handoff_context":
+                return index
+        return None
+
+    @staticmethod
+    def _text_arg(args: dict[str, Any], field: str) -> str:
+        value = args.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field} must be a non-empty string.")
+        return value.strip()

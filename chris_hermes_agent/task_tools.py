@@ -273,7 +273,8 @@ class TaskToolHandlers:
             )
             data = activation.to_json_dict()
             data["context_rotation_applied"] = False
-            data["context_rotation_phase"] = "P4"
+            data["context_rotation_required"] = True
+            data["next_required_action"] = "call_handoff_context"
             return _success(data)
         if action == "search":
             results = service.search_tasks(

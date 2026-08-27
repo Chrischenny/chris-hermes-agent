@@ -375,7 +375,7 @@ class TaskRepository:
         handoff_reason: str,
         end_message_index: int | None = None,
     ) -> ContextSegmentRecord:
-        self._connection.execute(
+        cursor = self._connection.execute(
             """
             UPDATE context_segments
             SET end_time = ?, handoff_reason = ?, end_message_index = ?
@@ -383,6 +383,10 @@ class TaskRepository:
             """,
             (end_time, handoff_reason, end_message_index, segment_id),
         )
+        if cursor.rowcount != 1:
+            raise ConcurrentUpdateError(
+                f"Context Segment {segment_id!r} is already closed or changed."
+            )
         segment = self.get_segment(segment_id)
         if segment is None:
             raise KeyError(f"Unknown context segment: {segment_id}")

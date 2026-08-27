@@ -11,16 +11,18 @@ metadata:
 
 ## Current implementation status
 
-The plugin is in P0 contract-scaffolding mode. Its tools are visible so their
-names and schemas remain stable, but Task State persistence and Context
-Rotation are deliberately disabled.
+The plugin runtime has completed P4: Task State and Checkpoint persistence plus
+atomic Context Rotation are available. The full Agent-facing workflow for task
+classification, Checkpoint quality, and automatic Handoff decisions is still
+scheduled for P5.
 
-Until the runtime reports that those phases are available:
+Until that workflow is added:
 
-- do not claim that a checkpoint was persisted;
-- do not claim that a context handoff occurred;
-- do not work around the disabled tools by deleting session history;
-- continue using the active Hermes context normally.
+- do not infer task/subtask boundaries or Handoff timing from this stub;
+- do not call `handoff_context` without a persisted valid Checkpoint and the
+  exact active Task/Segment returned by the runtime;
+- do not claim Rotation succeeded unless `handoff_applied` is `true`;
+- never delete or rewrite Hermes Session history.
 
-The complete Task State, Checkpoint, new-task detection, and Handoff workflow
-will be enabled by later implementation phases.
+P5 will replace this status stub with the complete Task State, Checkpoint,
+new-task detection, and Handoff operating workflow.

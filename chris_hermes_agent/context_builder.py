@@ -7,6 +7,8 @@ from typing import Any
 
 from agent.model_metadata import estimate_messages_tokens_rough
 
+from .task_models import CheckpointRecord, TaskRecord
+
 RUNTIME_STATUS_HEADER = "[Runtime Status]\n"
 
 
@@ -112,3 +114,75 @@ def _is_runtime_status_message(message: dict[str, Any]) -> bool:
         and "\nPrompt tokens, estimated: " in content
         and "\nContext segment: " in content
     )
+
+
+def _list_section(title: str, values: tuple[str, ...]) -> tuple[str, ...]:
+    items = values or ("none",)
+    return (f"{title}:", *(f"- {item}" for item in items))
+
+
+def render_handoff_bootstrap(
+    task: TaskRecord,
+    checkpoint: CheckpointRecord,
+) -> str:
+    """Render the durable recovery state used by every rotated request."""
+    return "\n".join(
+        (
+            "[Context Handoff Bootstrap]",
+            "",
+            f"Task: {task.task_id} — {task.title}",
+            f"Task status: {task.status.value}",
+            f"Checkpoint: {checkpoint.checkpoint_id}",
+            f"Goal: {checkpoint.goal}",
+            f"Current phase: {checkpoint.current_phase}",
+            *_list_section("Constraints", checkpoint.constraints),
+            *_list_section("Completed", checkpoint.completed),
+            *_list_section("Current state", checkpoint.current_state),
+            *_list_section("Decisions", checkpoint.decisions),
+            *_list_section("Rejected alternatives", checkpoint.rejected_alternatives),
+            *_list_section("Known issues", checkpoint.known_issues),
+            *_list_section("Artifacts", checkpoint.artifacts),
+            *_list_section("Next actions", checkpoint.next_actions),
+        )
+    )
+
+
+def build_handoff_context(
+    request_messages: list[dict[str, Any]],
+    *,
+    conversation_messages: list[dict[str, Any]],
+    start_message_index: int,
+    task: TaskRecord | None,
+    checkpoint: CheckpointRecord | None,
+    diagnostic: str | None = None,
+) -> list[dict[str, Any]]:
+    """Keep the Hermes stable head, durable bootstrap, and new Segment tail."""
+    if not 0 <= start_message_index <= len(conversation_messages):
+        raise ValueError("start_message_index is outside conversation history.")
+
+    prefix_length = len(request_messages) - len(conversation_messages)
+    if prefix_length < 0:
+        raise ValueError(
+            "request_messages cannot be shorter than conversation history."
+        )
+    stable_head = request_messages[:prefix_length]
+    segment_tail = request_messages[prefix_length + start_message_index :]
+
+    if diagnostic is None and task is not None and checkpoint is not None:
+        bootstrap_content = render_handoff_bootstrap(task, checkpoint)
+    else:
+        reason = diagnostic or "task_or_checkpoint_missing"
+        bootstrap_content = "\n".join(
+            (
+                "[Context Handoff Bootstrap Error]",
+                "",
+                f"Recovery state unavailable: {reason}",
+                "Do not infer missing checkpoint state or reintroduce archived trace.",
+            )
+        )
+
+    return [
+        *stable_head,
+        {"role": "user", "content": bootstrap_content},
+        *segment_tail,
+    ]

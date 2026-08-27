@@ -96,6 +96,8 @@ def test_tool_flow_creates_checkpoints_searches_and_resumes_tasks(
         == checkpoint["data"]["checkpoint"]["checkpoint_id"]
     )
     assert resumed["data"]["context_rotation_applied"] is False
+    assert resumed["data"]["context_rotation_required"] is True
+    assert resumed["data"]["next_required_action"] == "call_handoff_context"
 
 
 def test_event_tool_appends_supported_event_and_rejects_unknown_type(

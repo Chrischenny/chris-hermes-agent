@@ -549,8 +549,8 @@ Skill 负责：
 | P1 配置与 Policy Resolver | 已完成 | 已实现配置注入、校验、匹配和模型切换 |
 | P2 SQLite 与 Task State | 已完成 | 已实现持久化、任务工具、暂存、搜索和恢复 |
 | P3 Runtime Status 与 Token 观测 | 已完成 | 已实现请求级状态、估算/真实 Usage 和 Active Pointer 观测 |
-| P4 Context Rotation | 下一阶段 | 依赖已满足，尚未开始 |
-| P5 Skill、SOUL 与任务隔离 | 未开始 | 依赖 P2、P4 |
+| P4 Context Rotation | 已完成 | 已实现原子 Segment 切换、Checkpoint Bootstrap 和同 Turn 继续 |
+| P5 Skill、SOUL 与任务隔离 | 下一阶段 | 依赖已满足，尚未开始 |
 | P6 Emergency Fallback | 未开始 | 依赖 P1、P3、P4 |
 | P7 集成测试与上线 | 未开始 | 依赖全部开发阶段 |
 
@@ -629,6 +629,8 @@ Doctor 均通过。
 
 ### P4：Context Rotation
 
+状态：**已完成（2026-08-27）**
+
 - 实现 `handoff_context`；
 - 实现 Active Pointer 和 Segment 状态机；
 - 实现 Context Bootstrap；
@@ -636,6 +638,16 @@ Doctor 均通过。
 - 支持同一 Agent Turn 内继续执行。
 
 完成标准：Handoff 后旧 Tool Trace 不再发送，Agent 不依赖下一条用户消息即可继续。
+
+完成证据：`handoff_context` 校验 Checkpoint 所属关系、Checksum 和调用方预期的
+Active Task/Segment；旧 Segment 关闭、新 Segment 创建、Session Pointer 更新与
+`HANDOFF_COMPLETED` Event 在同一 SQLite 事务中提交。下一次
+`select_context()` 保留 Hermes 稳定头，注入完整 Checkpoint Bootstrap，并从
+触发 Handoff 的 assistant Tool Call 开始保留新 Segment 消息，因此 Tool
+Call/Result 始终成对且旧 Tool Trace 不再发送。并发/重复调用、事务回滚、同 Turn
+Tool Loop、进程重启、Checkpoint 损坏、历史遗留 Tool Call 和损坏消息游标均有
+测试覆盖。90 个测试通过，总覆盖率超过 80%，Ruff、Mypy strict、构建和 Plugin
+Doctor 均通过。
 
 ### P5：Skill、SOUL 与任务隔离
 

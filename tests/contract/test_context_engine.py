@@ -102,7 +102,7 @@ def test_engine_exposes_only_handoff_context_tool() -> None:
     }
 
 
-def test_handoff_tool_is_safely_disabled_during_p0() -> None:
+def test_handoff_tool_requires_initialized_session_lifecycle() -> None:
     engine = _engine()
 
     result = json.loads(
@@ -121,8 +121,8 @@ def test_handoff_tool_is_safely_disabled_during_p0() -> None:
     assert result == {
         "ok": False,
         "error": {
-            "code": "phase_not_ready",
-            "message": "handoff_context is registered but disabled until P4",
+            "code": "missing_session_id",
+            "message": "Hermes ContextEngine Session lifecycle is not initialized.",
         },
     }
 
