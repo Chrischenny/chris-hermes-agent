@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-27
 >
-> 交接边界：P4 已完成，P5 尚未开始
+> 交接边界：P5 已完成，P6 尚未开始
 >
-> 下一阶段：P5 Skill、SOUL 与任务隔离
+> 下一阶段：P6 Emergency Fallback
 
 ## 1. Task
 
@@ -16,6 +16,7 @@
 - P2 实现提交：`1b30c38 feat: persist task lifecycle and resume state`
 - P3 实现提交：`bfb862e feat: add runtime context status observation`
 - P4 实现提交：`5b9d06f feat: add atomic context rotation`
+- P5 实现提交：`bd71a47 feat: add task isolation handoff workflow`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -135,8 +136,23 @@ closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-
   中加入 Checkpoint Bootstrap 和新 Segment Tail，不修改 Session History；
 - Handler 只接受消息尾部当前 assistant 中的 `handoff_context`，不得向前扫描并
   误用历史 Tool Call；
-- P4 只旋转当前 Active Task；新任务、子任务分类与继承规则属于 P5；
+- ContextEngine 只旋转当前 Active Task；新任务、子任务与 Resume 先由 Skill/Task
+  层完成持久化 Active Pointer 编排，再显式 Rotation；
 - 普通 Compression 继续关闭，Emergency Delegate 属于 P6。
+
+### 4.7 Agent 工作流与任务隔离
+
+- 任务分类保留在 bundled Skill，不进入 ContextEngine；
+- 分类结果为 continuation、subtask、new_task 或 ambiguous；会改变持久化状态且
+  置信度不足时必须先向用户确认；
+- 子任务只允许按项继承父 Task 的 constraints、decisions 和 artifacts，并记录
+  `parent_task_id`；
+- 新任务不继承父 Task 状态；新任务和子任务均需创建目标 Task 自己的 Checkpoint；
+- 旧 Task Checkpoint、目标 Task 创建、目标 Checkpoint 和显式
+  `handoff_context` 共同构成隔离流程；
+- Resume 更新 Pointer 后仍必须显式 Rotation，不能把 Task 激活当作 Context 已切换；
+- `soul/SOUL-snippet.md` 只引用 Runtime Status 中当前模型的 Policy，不包含固定
+  模型、Token 或比例阈值。
 
 ## 5. Completed
 
@@ -215,9 +231,26 @@ P4 已完成：
   Tool Pairing；
 - 更新版本、README、bundled Skill 状态和开发计划并提交 P4。
 
+P5 已完成：
+
+- 将插件版本更新到 `0.5.0`，bundled Skill 版本更新到 `0.2.0`；
+- 将 P4 状态 Stub 重写为完整 Agent 工作流，覆盖任务对账、普通 Handoff 决策、
+  Checkpoint 前置检查、Rotation 结果校验和同 Turn 恢复；
+- 新增 `checkpoint-template.md`、`new-task-detection.md` 和
+  `task-state-rules.md` 三个按需加载的参考文档；
+- 明确 continuation、subtask、new_task、ambiguous 四类语义及低置信度确认边界；
+- 明确子任务只按项继承 constraints、decisions 和 artifacts，禁止继承父 Task
+  Checkpoint、Event、Session、Segment、conversation 和 Tool Trace；
+- 明确新任务和子任务均先保存旧 Task，再创建目标 Task 自己的 Checkpoint，最后
+  使用目标 Task/Segment 显式调用 `handoff_context`；
+- 明确 Resume 返回 `context_rotation_required: true` 后必须继续显式 Rotation；
+- 新增 `soul/SOUL-snippet.md`，只引用当前 Runtime Policy，不写固定阈值；
+- 新增任务延续、子任务继承、完全新任务隔离和 Resume Rotation 集成测试；
+- 更新 README 和开发计划并提交 P5。
+
 ## 6. Current State
 
-P4 已启用原子 Context Rotation，P5 Agent 工作流尚未实现：
+P5 已完成 Agent 工作流与任务隔离，P6 Emergency Fallback 尚未实现：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
 - `threshold_tokens` 只反映已匹配且有效的普通 Handoff 起点；
@@ -241,9 +274,15 @@ P4 已启用原子 Context Rotation，P5 Agent 工作流尚未实现：
   `handoff_context`；
 - `handoff_context` 已可用，成功结果包含新 Segment、Checkpoint、Task、Next
   Actions 和 `handoff_applied: true`；
-- 当前 Handoff 只允许目标 Task 等于当前 Active Task，P5 再编排新任务/子任务；
-- `skills/context-handoff/SKILL.md` 目前只是准确的 P4 状态 Stub，完整操作流程在
-  P5 编写；
+- Handoff 仍只允许目标 Task 等于当前 Active Task；bundled Skill 会先创建或恢复
+  目标 Task 并更新 Active Pointer，再使用目标 Checkpoint 执行 Rotation；
+- `skills/context-handoff/SKILL.md` 已是完整 P5 工作流，并按需路由三个 reference；
+- 当前任务延续不会创建新 Task 或 Rotation；
+- 子任务会记录 `parent_task_id`，只继承显式选择的白名单状态；
+- 独立新任务不继承旧任务结构化状态，Rotation 后也不包含旧 User History 或
+  Tool Trace；
+- 低置信度分类和多个相近 Resume 候选会在改变状态前要求用户确认；
+- `soul/SOUL-snippet.md` 已准备好但尚未合并到 `chris-avatar/SOUL.md`；
 - 不会调用 Hermes 默认 Compression；
 - 不会修改 Hermes Session；
 - 未安装到 `chris-avatar`。
@@ -267,6 +306,10 @@ P4 已启用原子 Context Rotation，P5 Agent 工作流尚未实现：
 - `chris_hermes_agent/checkpoint_service.py`
 - `chris_hermes_agent/task_tools.py`
 - `skills/context-handoff/SKILL.md`
+- `skills/context-handoff/references/checkpoint-template.md`
+- `skills/context-handoff/references/new-task-detection.md`
+- `skills/context-handoff/references/task-state-rules.md`
+- `soul/SOUL-snippet.md`
 - `tests/contract/`
 - `tests/unit/test_policy.py`
 - `tests/unit/test_context_builder.py`
@@ -278,20 +321,26 @@ P4 已启用原子 Context Rotation，P5 Agent 工作流尚未实现：
 - `tests/integration/test_task_tools.py`
 - `tests/integration/test_runtime_status.py`
 - `tests/integration/test_context_rotation.py`
+- `tests/integration/test_task_isolation.py`
 - `tests/integration/test_plugin_doctor.py`
 - `pyproject.toml`
 
 ## 7. Verification Evidence
 
-P4 最终验证结果：
+P5 最终验证结果：
 
-- 90 个单元/契约/集成测试全部通过；
-- 总覆盖率 86.32%，超过 80% 门槛；
+- 98 个单元/契约/集成测试全部通过；
+- 总覆盖率 86.49%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
 - `hermes plugins doctor . --ci` 通过且无警告；
 - Plugin Doctor 在临时 `HERMES_HOME` 中运行，没有触碰 `chris-avatar`。
+- Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
+  因仓库当前没有授权文件，本阶段不代替用户指定许可证；
+- `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
+  `version` 和 `author` 字段，因此不作为此 Hermes Skill 的权威校验；Hermes
+  Skill Linter 与 Plugin Doctor 均已通过。
 
 复验命令：
 
@@ -305,6 +354,8 @@ HERMES_AGENT_ROOT="$HOME/.hermes/hermes-agent" \
 uv build
 hermes_temp_dir=$(mktemp -d)
 HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
+PYTHONPATH="$HOME/.hermes/hermes-agent" \
+  python3 -m tools.skill_linter skills/context-handoff
 ```
 
 ## 8. Known Issues / Expected Limitations
@@ -316,9 +367,12 @@ HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 - Resume Tool 不直接执行 Rotation；它返回明确的下一步，Agent 必须再调用
   `handoff_context`；
 - 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
-- 完整 Handoff Skill、SOUL 规则、新任务/子任务分类和继承策略尚未实现，属于
-  P5；
-- Emergency Fallback 尚未实现；
+- Emergency Fallback 尚未实现；`should_compress()` 仍恒为 `False`，`compress()`
+  仍原样返回输入；
+- 尚未实现压缩前 Context 归档、Hermes Compression Delegate、压缩后安全范围
+  验证及两个 Emergency Event；
+- Runtime Status 会展示已解析的 Emergency Policy 阈值，但 P6 完成前该字段只是
+  Policy 元数据，不代表 Emergency 已可执行；
 - `chris-avatar` 仍使用 Hermes 默认 ContextEngine；
 - `chris-avatar/SOUL.md` 尚未迁移。
 
@@ -345,39 +399,41 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P5 开始，建议严格按以下顺序：
+新会话从 P6 开始，建议严格按以下顺序：
 
-1. 阅读本交接文件和开发计划 P5；
+1. 阅读本交接文件、开发计划 P6 和 Hermes 当前 ContextEngine/Compression
+   Delegate 实现；
 2. 检查 `git status`，确认 `main` 与 `origin/main` 同步；
-3. 使用 `skill-creator` 完整重写 bundled `context-handoff` Skill，并读取该技能的
-   全部创建规范；
-4. 使用 `tdd-workflow` 先定义当前任务延续、子任务、完全新任务和低置信度确认的
-   场景测试；
-5. 明确 Task/Checkpoint/Decision/Artifact 的继承白名单，禁止复制父任务 Tool
-   Trace；
-6. 编写 Checkpoint 质量自检、Handoff 前置检查和 Handoff 后从 Next Actions
-   恢复的操作流程；
-7. 编写 `soul/SOUL-snippet.md`，只引用当前模型 Runtime Policy，不写固定 Token
-   或固定比例；
-8. 覆盖新任务先 Checkpoint/暂停旧 Task、创建或恢复目标 Task、再显式调用
-   `handoff_context` 的完整 Tool Loop；
-9. 保持分类语义在 Skill/Task 层，ContextEngine 不负责理解用户目标；
-10. 测试新任务隔离、子任务父子关系、多个相近恢复候选、低置信度确认和连续
-    Rotation；
-11. 运行完整 P0～P4 回归、覆盖率、类型检查、构建和隔离 Plugin Doctor；
-12. 更新版本、README、计划与本交接文档，提交并推送 P5。
+3. 使用 `tdd-workflow` 先定义无 Policy、Emergency 未启用、阈值未到、阈值到达、
+   Delegate 成功/失败和压缩后仍超限场景；
+4. 调研 Hermes `Compressor` 或 Compression Delegate 的稳定调用边界，避免复制
+   Hermes 内部压缩实现；
+5. 设计压缩前 Active Context 归档格式与插件数据目录位置，归档必须可追溯且不得
+   写入插件安装目录；
+6. 仅在当前 Policy 明确 `emergency_enabled` 且达到其配置阈值时让
+   `should_compress()` 返回 `True`；无匹配或无效 Policy 继续 fail closed；
+7. 在 Emergency 流程中依次归档、记录
+   `EMERGENCY_COMPRESSION_TRIGGERED`、调用 Delegate、验证结果并记录
+   `EMERGENCY_COMPRESSION_COMPLETED`；
+8. 为失败路径定义可诊断结果，绝不把失败压缩伪装成成功或删除 canonical
+   Session History；
+9. 在 Runtime Status 标记当前 Segment 是否发生过 Emergency Compression，并让
+   bundled Skill 在稳定后补建正式 Checkpoint/Handoff；
+10. 覆盖重启恢复、模型切换、Policy 切换、归档校验和普通 Handoff 优先级；
+11. 运行完整 P0～P5 回归、覆盖率、类型检查、构建和隔离 Plugin Doctor；
+12. 更新版本、README、Skill、计划与本交接文档，提交并推送 P6。
 
-## 11. P5 Acceptance Criteria
+## 11. P6 Acceptance Criteria
 
-- bundled Skill 给出可执行且自洽的 Task/Checkpoint/Handoff 工作流；
-- 当前任务延续不会无故创建新 Task 或 Rotation；
-- 子任务记录正确的 `parent_task_id`，只继承显式允许的结构化状态；
-- 完全新任务先保存并暂停未完成旧 Task，再创建新 Task 和隔离 Context；
-- 分类置信度不足且结果会改变持久化状态时，必须向用户确认；
-- Resume 与新任务流程都会在持久化状态就绪后显式调用 `handoff_context`；
-- Checkpoint 必须包含继续目标所需字段、有效 Checksum 和非空 Next Actions；
-- 新 Context 不继承旧任务 Tool Trace；
-- SOUL 规则不包含固定模型阈值，只读取 Runtime Status 中的当前 Policy；
-- ContextEngine 继续只负责观测与执行，不承担 Task 语义分类；
-- P0～P4 全部测试继续通过；
+- 只有当前模型匹配且有效、并显式启用 Emergency 的 Policy 能触发兜底；
+- Emergency 阈值完全来自用户配置，代码、SOUL 和 Skill 不提供固定默认值；
+- 普通 Agent Handoff 保持优先，Emergency 只是逼近硬上限时的最后保护；
+- 压缩前完整 Active Context 归档到 Profile 插件数据目录并可追溯；
+- Triggered/Completed Event 顺序、Task、Session 和 Segment 关联正确；
+- Hermes Compression Delegate 的成功、失败和异常路径均 fail closed；
+- 压缩后 Request 必须重新估算并验证回到安全范围，不能只相信 Delegate 返回；
+- Runtime Status 能区分未发生、已触发、已完成和失败状态；
+- Emergency 不删除或改写 Hermes canonical Session History；
+- Emergency 后 bundled Skill 要求尽快创建正式 Checkpoint 并主动 Handoff；
+- P0～P5 全部测试继续通过；
 - 不修改、安装或重启 `chris-avatar`。

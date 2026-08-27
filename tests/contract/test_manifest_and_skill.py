@@ -79,7 +79,9 @@ def test_bundled_skill_routes_every_p5_workflow_reference() -> None:
         assert tool_name in skill
 
 
-def test_task_workflow_references_define_classification_and_isolation_contracts() -> None:
+def test_task_workflow_references_define_classification_and_isolation_contracts() -> (
+    None
+):
     detection = REFERENCE_PATHS["new-task-detection.md"].read_text(encoding="utf-8")
     state_rules = REFERENCE_PATHS["task-state-rules.md"].read_text(encoding="utf-8")
 
