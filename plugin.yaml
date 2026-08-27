@@ -1,6 +1,6 @@
 name: chris-hermes-agent
-version: 0.6.0
-manifest_version: 2
+version: 0.7.0
+manifest_version: 1
 api_version: 1
 description: "Agent-managed task state, checkpoints, and context handoff for long-running Hermes tasks."
 author: Chrischenny

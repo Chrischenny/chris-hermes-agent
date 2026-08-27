@@ -4,7 +4,7 @@
 >
 > 目标 Profile：`chris-avatar`
 >
-> 文档状态：P6 已完成，下一阶段为 P7 集成测试与上线
+> 文档状态：P7 隔离集成与回滚准备已完成，等待 Profile 上线授权
 
 ## 1. 已确认决策
 
@@ -552,7 +552,7 @@ Skill 负责：
 | P4 Context Rotation | 已完成 | 已实现原子 Segment 切换、Checkpoint Bootstrap 和同 Turn 继续 |
 | P5 Skill、SOUL 与任务隔离 | 已完成 | 已交付 Agent 工作流、SOUL 片段和任务隔离验证 |
 | P6 Emergency Fallback | 已完成 | 已实现安全归档、Hermes Delegate、验证和恢复 |
-| P7 集成测试与上线 | 下一阶段 | 开发依赖已满足，尚未开始 |
+| P7 集成测试与上线 | 进行中 | 隔离验收和回滚路径已完成，等待用户确认 Policy 与上线授权 |
 
 ### P0：工程骨架与契约测试
 
@@ -691,6 +691,8 @@ Doctor 均通过。
 
 ### P7：集成测试与 Profile 上线
 
+状态：**进行中（隔离发布候选已完成，Profile 上线待授权）**
+
 - 完成长 Tool Loop 集成测试；
 - 测试 Gateway 重启；
 - 测试连续多次 Rotation；
@@ -699,6 +701,16 @@ Doctor 均通过。
 - 重启 Gateway 并进行观察期验证。
 
 完成标准：所有验收标准通过，并具备一键回滚路径。
+
+当前证据：116 个测试通过，总覆盖率 86.94%。真实 Hermes Host 测试覆盖 Tool
+Schema Request Pressure、Compression no-progress 边界、Emergency 后正式
+Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安装测试通过
+标准 `plugins install`、installed-path Doctor、配置注入、ContextEngine 选择及
+模型/Policy fail-closed 切换。连续 10 次 Rotation 保持 Prompt Cache 稳定头并在
+中途重建 Engine。备份/回滚脚本通过隔离 E2E，可校验快照后恢复原 config、SOUL
+和 Session 数据库，同时保留插件 SQLite 与 Emergency 归档。当前 Hermes 安装器
+只接受 Manifest v1，因此发布包显式锁定 `manifest_version: 1`；加载器所需的
+`api_version` 和 `config_schema` 仍保留。尚未修改、安装或重启 `chris-avatar`。
 
 ## 15. 测试计划
 

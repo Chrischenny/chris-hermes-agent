@@ -3,7 +3,9 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository has completed **P6: Emergency Fallback**. The
+The repository is at the **P7 release-candidate boundary**. Isolated integration,
+real Hermes Host/install, restart, 10-rotation, and rollback tests are complete;
+the explicitly authorized `chris-avatar` rollout and observation window remain. The
 plugin persists profile-scoped Task State, exposes an atomic `handoff_context`
 tool, and ships the Agent workflow that classifies task boundaries, creates
 quality-checked Checkpoints, and selects an isolated Context without ending the
@@ -24,8 +26,7 @@ Checkpoint guidance includes all runtime-required fields, a semantic quality
 self-check, Checksum/result validation, and the exact Handoff preflight. The
 companion [`SOUL-snippet.md`](./soul/SOUL-snippet.md) references only the
 current Runtime Policy and contains no fixed model, Token, or ratio threshold.
-It is a migration artifact for P7 and is not installed into `chris-avatar` by
-this development phase.
+It remains a migration artifact until the authorized `chris-avatar` rollout.
 
 ## Context rotation
 
@@ -81,6 +82,11 @@ plugins:
 
 No model threshold is supplied by the plugin. Invalid or unmatched policies
 produce diagnostic state and keep Handoff and Emergency behavior disabled.
+
+The manifest intentionally remains at version 1 for compatibility with the
+Hermes v0.20.5 installer. The plugin retains additive `api_version` and
+`config_schema` fields, and P7 exercises the standard installer plus installed-path
+runtime discovery in a temporary Profile.
 
 ## Emergency fallback
 
@@ -156,3 +162,5 @@ HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 
 See [the development plan](./Hermes%20长任务%20Context%20Handoff%20开发计划.md)
 and [the original requirements](./Hermes%20长任务%20Context%20Handoff%20方案.md).
+The guarded live procedure and one-command rollback are in the
+[`chris-avatar` P7 runbook](./docs/P7-chris-avatar-runbook.md).

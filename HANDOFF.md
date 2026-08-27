@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-27
 >
-> 交接边界：P6 已完成，P7 尚未开始
+> 交接边界：P7 隔离发布候选已完成，Profile 上线待授权
 >
-> 下一阶段：P7 集成测试与 Profile 上线
+> 下一阶段：确认 Policy、执行受控 Profile 上线与观察
 
 ## 1. Task
 
@@ -45,7 +45,8 @@
 5. 不允许在代码或 SOUL 中硬编码跨模型通用甜区。
 6. 普通 Handoff 时机由用户配置和 Agent 当前任务状态共同决定。
 7. 没有匹配当前模型的 Policy 时，只报告 Context 使用事实，不猜测阈值。
-8. 当前阶段不得修改、安装或重启正在运行的 `chris-avatar`。
+8. 未获得用户明确上线授权前，不得修改、安装或重启正在运行的
+   `chris-avatar`。
 
 ## 4. Architecture Decisions
 
@@ -284,7 +285,7 @@ P6 已完成：
 
 ## 6. Current State
 
-P6 已完成 Emergency Fallback，P7 集成测试与 Profile 上线尚未开始：
+P7 隔离发布候选已完成，`chris-avatar` Profile 上线仍未执行：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
 - `threshold_tokens` 只反映已匹配且显式启用的 Emergency 阈值；
@@ -329,6 +330,18 @@ P6 已完成 Emergency Fallback，P7 集成测试与 Profile 上线尚未开始�
   原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
 - 未安装到 `chris-avatar`。
+- 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
+- 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
+  no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
+  进程恢复；
+- 标准 Hermes 安装器、installed-path Doctor、Profile 配置注入、ContextEngine
+  选择和模型/Policy 切换已在临时 Profile 通过；
+- 当前 Hermes 加载器支持 Manifest v2，但安装器仍只接受 v1，因此 P7 发布包锁定
+  `manifest_version: 1` 并保留扩展配置字段；
+- `scripts/chris-avatar-rollout.sh` 提供带 Checksum/SQLite 完整性校验的备份和
+  一条命令回滚，回滚不会删除插件 SQLite 或 Emergency 归档；
+- `docs/P7-chris-avatar-runbook.md` 定义预检、安装、配置、SOUL 迁移、观察、
+  回滚和至少 30 天的保留策略。
 
 关键文件：
 
@@ -354,6 +367,10 @@ P6 已完成 Emergency Fallback，P7 集成测试与 Profile 上线尚未开始�
 - `skills/context-handoff/references/new-task-detection.md`
 - `skills/context-handoff/references/task-state-rules.md`
 - `soul/SOUL-snippet.md`
+- `docs/P7-chris-avatar-runbook.md`
+- `scripts/chris-avatar-rollout.sh`
+- `tests/e2e/test_p7_host_workflow.py`
+- `tests/e2e/test_p7_rollout_script.py`
 - `tests/contract/`
 - `tests/unit/test_policy.py`
 - `tests/unit/test_context_builder.py`
@@ -373,15 +390,17 @@ P6 已完成 Emergency Fallback，P7 集成测试与 Profile 上线尚未开始�
 
 ## 7. Verification Evidence
 
-P6 最终验证结果：
+P7 隔离发布候选验证结果：
 
-- 110 个单元/契约/集成测试全部通过；
+- 116 个单元/契约/集成/E2E 测试全部通过；
 - 总覆盖率 86.94%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
 - `hermes plugins doctor . --ci` 通过且无警告；
 - Plugin Doctor 在临时 `HERMES_HOME` 中运行，没有触碰 `chris-avatar`。
+- 标准插件安装、启用、配置和 installed-path Runtime 选择在临时 Profile 通过；
+- 备份和一条命令回滚在临时 Profile 通过；
 - Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
   因仓库当前没有授权文件，本阶段不代替用户指定许可证；
 - `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
@@ -414,7 +433,8 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
   `handoff_context`；
 - 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
 - Emergency 归档包含完整 Active Request，可能含敏感信息；权限和 Checksum 已
-  收紧，但 P7 上线前仍需确认 Profile 目录备份、保留和清理策略；
+  收紧，P7 runbook 要求观察期全部保留、验收后至少保留 30 天，清理必须另行
+  获得用户决定；
 - Emergency 成功后 canonical Session 保持完整，后续请求使用归档中的压缩
   Selection；Agent 仍需尽快补建正式 Checkpoint 并执行普通 Handoff；
 - `select_context()` 的消息估算不含 Tool Schema Token；Hermes Host 传给
@@ -445,22 +465,17 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P7 开始，建议严格按以下顺序：
+严格按以下顺序完成剩余 P7：
 
-1. 阅读本交接文件、开发计划 P7 和上线/回滚步骤；
-2. 检查 `git status`、`origin/main`、Hermes 当前 Commit 和 Gateway 状态；
-3. 在不触碰 `chris-avatar` 的隔离 Profile 中补齐真实长 Tool Loop、连续至少
-   10 次 Rotation、Emergency 后正式 Handoff 和 Gateway 重启测试；
-4. 验证真实 Hermes Host 的 Tool Schema Pressure、Compression no-progress
-   boundary 和下一次 `select_context()` 行为；
-5. 验证 Prompt Cache Prefix、模型/Provider 切换、Policy 热切换和归档恢复；
-6. 制定归档保留/清理策略，确认备份内容和一键回滚命令；
-7. 向用户确认 `gpt-5.6-sol` 的实际甜区和 Emergency Policy 数值；
-8. 在获得上线授权后备份 `chris-avatar` 的 config、SOUL、state 和 Session 索引；
-9. 安装插件、迁移 SOUL、启用 `context.engine: context-handoff`，先做配置检查；
-10. 重启 Gateway，用隔离 Session 观察日志、Token、Event、Segment 和 Archive；
-11. 完成验收或执行回滚，不删除插件 SQLite 和 Emergency 诊断归档；
-12. 更新最终版本、README、计划与交接文档，提交并推送 P7。
+1. 获取用户对 `gpt-5.6-sol` Handoff 类型/数值、Emergency 开关/阈值的确认；
+2. 提交并推送 0.7.0 发布候选，记录用于安装的不可变 40 位 Commit SHA；
+3. 再次向用户取得修改 `chris-avatar` 和重启 Gateway 的明确上线授权；
+4. 按 `docs/P7-chris-avatar-runbook.md` 记录预检并执行受保护备份；
+5. 安装固定 SHA、写入确认后的 Policy、迁移 SOUL、启用插件并通过配置检查；
+6. 重启 Gateway，用隔离 Session 观察日志、Token、Event、Segment 和 Archive；
+7. 完成验收或运行一条命令回滚；无论哪条路径都保留插件 SQLite 和 Emergency
+   诊断归档；
+8. 记录真实上线证据，将 P7 标记为最终完成并推送交接文档。
 
 ## 11. P7 Acceptance Criteria
 

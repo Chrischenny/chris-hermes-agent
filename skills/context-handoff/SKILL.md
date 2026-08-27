@@ -1,7 +1,7 @@
 ---
 name: context-handoff
 description: Manage durable Hermes tasks and active Context Rotation.
-version: 0.3.0
+version: 0.4.0
 author: Chrischenny
 metadata:
   hermes:

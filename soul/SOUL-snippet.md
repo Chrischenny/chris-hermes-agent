@@ -21,5 +21,7 @@
   ask the user to choose. After durable resume, explicitly rotate Context as directed by
   the tool result.
 - Emergency Fallback may run only when the current Runtime policy explicitly enables it
-  and the runtime actually reports the action. Never simulate it or substitute default
-  Compression.
+  and the runtime actually reports the action. When its status is `completed`, reconcile
+  the Task, create a complete Checkpoint at the next stable boundary, and perform the
+  normal explicit Handoff. For `triggered` or `failed`, do not retry Compression or claim
+  success. Never simulate Emergency Fallback or substitute default Compression.

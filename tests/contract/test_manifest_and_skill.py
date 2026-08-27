@@ -35,8 +35,8 @@ def test_manifest_declares_native_standalone_plugin() -> None:
 
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
-    assert manifest["version"] == "0.6.0"
-    assert manifest["manifest_version"] == 2
+    assert manifest["version"] == "0.7.0"
+    assert manifest["manifest_version"] == 1
     assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
     assert manifest["config_schema"]["handoff"]["type"] == "dict"
@@ -59,7 +59,7 @@ def test_bundled_skill_has_valid_identity() -> None:
     frontmatter = _read_frontmatter(SKILL_PATH)
 
     assert frontmatter["name"] == "context-handoff"
-    assert frontmatter["version"] == "0.3.0"
+    assert frontmatter["version"] == "0.4.0"
     assert "Context" in frontmatter["description"]
 
 
@@ -131,3 +131,13 @@ def test_soul_migration_uses_runtime_policy_without_fixed_thresholds() -> None:
     assert "Next Actions" in soul
     assert re.search(r"\b(?:gpt|claude|gemini|glm)-", soul, re.IGNORECASE) is None
     assert re.search(r"\b\d+(?:\.\d+)?\s*(?:%|tokens?)\b", soul, re.IGNORECASE) is None
+
+
+def test_soul_requires_normal_handoff_after_completed_emergency() -> None:
+    soul = SOUL_PATH.read_text(encoding="utf-8")
+
+    assert "Emergency Fallback" in soul
+    assert "completed" in soul
+    assert "Checkpoint" in soul
+    assert "normal explicit Handoff" in soul
+    assert "do not retry" in soul
