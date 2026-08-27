@@ -1,7 +1,7 @@
 ---
 name: context-handoff
 description: Manage durable Hermes tasks and active Context Rotation.
-version: 0.4.0
+version: 0.4.1
 author: Chrischenny
 metadata:
   hermes:
@@ -36,11 +36,39 @@ On a long task, a changed user goal, or a resume request:
 Do not create a second Task for ordinary continuation. Do not rotate merely because a new
 user message arrived.
 
+## Task State fields versus Checkpoint fields
+
+These payloads deliberately use different schemas. Never copy the complete Checkpoint
+object into `task_state_manage.state`.
+
+Task State fields are exactly:
+
+```text
+title, goal, constraints, current_phase, completed, in_progress,
+known_issues, next_actions, decisions, artifacts, search_aliases, tags
+```
+
+For `action: create`, put the non-empty `title` and `goal` inside `state`; Task status is
+set by the lifecycle action and is not a `state` field. Use `in_progress` for current Task
+work. For `action: update`, send only changed Task State fields plus `task_id` and the last
+returned `expected_version`.
+
+Checkpoint fields are exactly:
+
+```text
+goal, constraints, current_phase, completed, current_state, decisions,
+rejected_alternatives, known_issues, artifacts, next_actions
+```
+
+All Checkpoint fields are required by `checkpoint_create.checkpoint`, and `next_actions`
+must be non-empty. `current_state` and `rejected_alternatives` are Checkpoint-only; they
+must never be passed to `task_state_manage.state`.
+
 ## Maintain the current Task
 
 - Use `task_state_manage` with `action: update` to keep phase, completed work, current
-  work, issues, decisions, artifacts, and Next Actions current. Use the returned version
-  for the next optimistic update.
+  work (`in_progress`), issues, decisions, artifacts, and Next Actions current. Use the
+  returned version for the next optimistic update.
 - Use `task_event_append` for durable decisions, revoked decisions, constraints, phase
   boundaries, material file changes, and meaningful test outcomes. Do not log Runtime
   Status or bulk shell/file/tool output.

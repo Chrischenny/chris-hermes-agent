@@ -155,6 +155,35 @@ def test_tools_fail_closed_for_missing_runtime_session_or_bad_arguments(
     assert bad_action["error"]["code"] == "invalid_action"
 
 
+def test_task_state_error_recovers_from_checkpoint_field_confusion(
+    tmp_path: Path,
+) -> None:
+    handlers = _handlers(tmp_path / "data.db")
+
+    result = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "create",
+                "state": {
+                    "title": "Task",
+                    "goal": "Goal",
+                    "current_state": ["ready"],
+                    "rejected_alternatives": [],
+                },
+            },
+            session_id="desktop-session",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_state"
+    message = result["error"]["message"]
+    assert "Supported Task State fields" in message
+    assert "in_progress" in message
+    assert "current_state" in message
+    assert "checkpoint_create" in message
+
+
 def test_task_tool_supports_get_update_list_and_complete(tmp_path: Path) -> None:
     handlers = _handlers(tmp_path / "data.db")
     created = json.loads(

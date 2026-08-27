@@ -558,7 +558,11 @@ class TaskService:
         if unknown:
             raise TaskServiceError(
                 "invalid_state",
-                f"Unsupported state fields: {sorted(unknown)}.",
+                f"Unsupported state fields: {sorted(unknown)}. "
+                f"Supported Task State fields: {sorted(self._STATE_FIELDS)}. "
+                "Use in_progress for current Task work; current_state and "
+                "rejected_alternatives belong only to "
+                "checkpoint_create.checkpoint.",
             )
         normalized: dict[str, Any] = {}
         for field, value in state.items():

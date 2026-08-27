@@ -16,6 +16,62 @@ from .store import TaskRepository
 from .task_models import EventType, TaskStatus
 from .task_service import TaskService, TaskServiceError
 
+
+def _string_list_schema(description: str) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "description": description,
+        "items": {"type": "string", "minLength": 1},
+    }
+
+
+_TASK_STATE_PROPERTIES: dict[str, Any] = {
+    "title": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Task title; required when action=create.",
+    },
+    "goal": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Task success condition; required when action=create.",
+    },
+    "constraints": _string_list_schema("Still-applicable Task constraints."),
+    "current_phase": {
+        "type": "string",
+        "description": "Smallest useful current Task phase label.",
+    },
+    "completed": _string_list_schema("Verified completed Task outcomes."),
+    "in_progress": _string_list_schema(
+        "Current Task work. Use this instead of Checkpoint current_state."
+    ),
+    "known_issues": _string_list_schema("Unresolved Task issues."),
+    "next_actions": _string_list_schema("Ordered executable Task next actions."),
+    "decisions": _string_list_schema("Durable Task decisions with rationale."),
+    "artifacts": _string_list_schema("Durable Task artifact identifiers."),
+    "search_aliases": _string_list_schema("Alternative Task search phrases."),
+    "tags": _string_list_schema("Short Task classification tags."),
+}
+
+_CHECKPOINT_PROPERTIES: dict[str, Any] = {
+    "goal": {"type": "string", "minLength": 1},
+    "constraints": _string_list_schema("Still-applicable requirements."),
+    "current_phase": {"type": "string"},
+    "completed": _string_list_schema("Verified outcomes."),
+    "current_state": _string_list_schema("Facts required to resume now."),
+    "decisions": _string_list_schema("Durable decisions with rationale."),
+    "rejected_alternatives": _string_list_schema(
+        "Rejected alternatives and their rationale."
+    ),
+    "known_issues": _string_list_schema("Unresolved issues and impact."),
+    "artifacts": _string_list_schema("Exact durable artifact identifiers."),
+    "next_actions": {
+        **_string_list_schema("Ordered concrete continuation actions."),
+        "minItems": 1,
+    },
+}
+
+
 TASK_STATE_MANAGE_SCHEMA: dict[str, Any] = {
     "name": "task_state_manage",
     "description": (
@@ -55,7 +111,15 @@ TASK_STATE_MANAGE_SCHEMA: dict[str, Any] = {
                 "uniqueItems": True,
             },
             "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            "state": {"type": "object"},
+            "state": {
+                "type": "object",
+                "description": (
+                    "Task State fields only. Do not use Checkpoint-only fields such "
+                    "as current_state or rejected_alternatives."
+                ),
+                "properties": _TASK_STATE_PROPERTIES,
+                "additionalProperties": False,
+            },
         },
         "required": ["action"],
         "additionalProperties": False,
@@ -90,7 +154,16 @@ CHECKPOINT_CREATE_SCHEMA: dict[str, Any] = {
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "minLength": 1},
-            "checkpoint": {"type": "object"},
+            "checkpoint": {
+                "type": "object",
+                "description": (
+                    "Complete recovery Checkpoint. current_state and "
+                    "rejected_alternatives belong here, not in Task State."
+                ),
+                "properties": _CHECKPOINT_PROPERTIES,
+                "required": list(_CHECKPOINT_PROPERTIES),
+                "additionalProperties": False,
+            },
         },
         "required": ["task_id", "checkpoint"],
         "additionalProperties": False,

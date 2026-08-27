@@ -9,6 +9,18 @@ latest Task `version` and use it as `expected_version`; after `concurrent_update
 The active Task and Segment must agree between durable state, the latest Runtime Status, and
 the arguments to `handoff_context`. Never guess identifiers from older messages.
 
+## Payload field boundary
+
+`task_state_manage.state` accepts only `title`, `goal`, `constraints`, `current_phase`,
+`completed`, `in_progress`, `known_issues`, `next_actions`, `decisions`, `artifacts`,
+`search_aliases`, and `tags`. Use `in_progress` for the Task's current work. Do not pass
+`status`; lifecycle actions own status transitions.
+
+`checkpoint_create.checkpoint` instead requires `goal`, `constraints`, `current_phase`,
+`completed`, `current_state`, `decisions`, `rejected_alternatives`, `known_issues`,
+`artifacts`, and non-empty `next_actions`. The Checkpoint-only `current_state` and
+`rejected_alternatives` fields are not valid Task State.
+
 ## Lifecycle ordering
 
 ### continuation

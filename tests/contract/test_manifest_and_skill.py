@@ -5,6 +5,13 @@ from pathlib import Path
 
 import yaml
 
+from chris_hermes_agent.checkpoint_service import CheckpointService
+from chris_hermes_agent.task_service import TaskService
+from chris_hermes_agent.task_tools import (
+    CHECKPOINT_CREATE_SCHEMA,
+    TASK_STATE_MANAGE_SCHEMA,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = PROJECT_ROOT / "plugin.yaml"
 SKILL_PATH = PROJECT_ROOT / "skills" / "context-handoff" / "SKILL.md"
@@ -35,7 +42,7 @@ def test_manifest_declares_native_standalone_plugin() -> None:
 
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
-    assert manifest["version"] == "0.7.0"
+    assert manifest["version"] == "0.7.1"
     assert manifest["manifest_version"] == 1
     assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
@@ -59,7 +66,7 @@ def test_bundled_skill_has_valid_identity() -> None:
     frontmatter = _read_frontmatter(SKILL_PATH)
 
     assert frontmatter["name"] == "context-handoff"
-    assert frontmatter["version"] == "0.4.0"
+    assert frontmatter["version"] == "0.4.1"
     assert "Context" in frontmatter["description"]
 
 
@@ -120,6 +127,28 @@ def test_checkpoint_reference_covers_runtime_required_fields() -> None:
     ):
         assert field in checkpoint_reference
     assert "checksum" in checkpoint_reference.lower()
+
+
+def test_task_tools_publish_closed_nested_payload_schemas() -> None:
+    task_state = TASK_STATE_MANAGE_SCHEMA["parameters"]["properties"]["state"]
+    checkpoint = CHECKPOINT_CREATE_SCHEMA["parameters"]["properties"]["checkpoint"]
+
+    assert set(task_state["properties"]) == TaskService._STATE_FIELDS
+    assert task_state["additionalProperties"] is False
+    assert set(checkpoint["properties"]) == CheckpointService.REQUIRED_FIELDS
+    assert set(checkpoint["required"]) == CheckpointService.REQUIRED_FIELDS
+    assert checkpoint["additionalProperties"] is False
+    assert checkpoint["properties"]["next_actions"]["minItems"] == 1
+
+
+def test_skill_distinguishes_task_state_from_checkpoint_state() -> None:
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+
+    assert "Task State fields" in skill
+    assert "`in_progress`" in skill
+    assert "Checkpoint fields" in skill
+    assert "`current_state`" in skill
+    assert "`rejected_alternatives`" in skill
 
 
 def test_soul_migration_uses_runtime_policy_without_fixed_thresholds() -> None:
