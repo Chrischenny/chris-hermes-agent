@@ -117,6 +117,12 @@ busy Session requires a valid Checkpoint and pauses the unfinished task by
 default. Task search covers state, selected decision events, Checkpoints,
 artifacts, aliases, tags, and Next Actions without indexing bulk Tool Trace.
 
+Its nested `state` Schema explicitly exposes the Task fields, including
+`in_progress`. `checkpoint_create.checkpoint` exposes a separate closed Schema with
+Checkpoint-only `current_state` and `rejected_alternatives`; unknown fields fail before
+any durable write. This distinction is repeated in the bundled Skill so models do not copy
+a Checkpoint payload into Task State.
+
 Runtime data is created lazily under the active Hermes Profile at:
 
 ```text

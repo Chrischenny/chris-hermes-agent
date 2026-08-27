@@ -20,6 +20,7 @@
 - P6 实现提交：`d2a9046 feat: add emergency context fallback`
 - P7 上线安全修复：`2927a05 fix: avoid vulnerable SQLite WAL mode`
 - P7 状态权限修复：`5adc9dc fix: restrict plugin state permissions`
+- P7 真机 Schema 修复：`cef29f6 fix: expose durable state tool schemas`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -334,8 +335,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 - 普通路径不会调用 Hermes 默认 Compression；显式 Emergency 路径委托给 Hermes
   原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
-- 已从不可变 Commit `5adc9dc03fcb09957a6fefca32f74fcd2a7ba27d` 安装到
-  `chris-avatar`，插件版本为 `0.7.0`；
+- 已从不可变 Commit `cef29f6c8de531f06e724c32a3481204d3a7d4a5` 安装到
+  `chris-avatar`，插件版本为 `0.7.1`；
 - 插件已启用且未授予 built-in tool override 权限，`context.engine` 已切换为
   `context-handoff`；
 - Profile Policy 为 ratio Handoff `0.70`、Emergency `0.85`；实际运行时解析到
@@ -343,13 +344,18 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 - 上线前快照保存在
   `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`，Checksum 和
   SQLite 完整性校验均通过；
-- `hermes-gateway-chris-avatar.service` 已重启并保持 active/running；启动日志确认
+- `hermes-gateway-chris-avatar.service` 与承载 Desktop 的
+  `hermes-dashboard.service` 均已重启并保持 active/running；启动日志确认
   `context-handoff` 注册成功，未出现插件 traceback/error/failed；
 - 插件数据库目录权限为 `0700`、文件权限为 `0600`，完整性校验通过；当前 Hermes
   Python 链接 SQLite 3.50.4，因此插件安全使用 `journal_mode=DELETE`，不进入已知
   WAL-reset 损坏路径；
-- 初始线上数据库尚无 Task/Event/Segment，这符合尚未运行真实开发任务的状态；
-  首次真实 Handoff/Emergency 的交叉追溯证据由后续实际工作负载观察补充。
+- 首次 Desktop 真实任务暴露了嵌套工具 Schema 未展开的问题：Skill 能加载，但模型
+  混淆 Task `in_progress` 与 Checkpoint `current_state/rejected_alternatives`，两次
+  创建均 fail closed 且没有半成品数据；0.7.1 已补全闭合 Schema、Skill 字段边界和
+  可恢复错误提示；
+- 修复部署后的线上数据库仍无 Task/Event/Segment，等待用户从原会话重新执行创建；
+  首次成功 Handoff/Emergency 的交叉追溯证据由后续实际工作负载观察补充。
 - 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
 - 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
   no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
@@ -412,8 +418,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 
 P7 最终验证与上线结果：
 
-- 123 个单元/契约/集成/E2E 测试全部通过；
-- 总覆盖率 86.91%，超过 80% 门槛；
+- 126 个单元/契约/集成/E2E 测试全部通过；
+- 总覆盖率 87.11%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -426,6 +432,9 @@ P7 最终验证与上线结果：
 - 安全预检发现 Hermes Python 的 SQLite 3.50.4 处于已知 WAL-reset 风险范围；插件
   已增加版本边界检测并在该版本使用 DELETE journal。另将插件数据目录/数据库
   权限收紧为 `0700/0600`，并拒绝符号链接、非常规文件和多硬链接数据库；
+- Desktop 真机回归确认插件 Skill/Tools 均可加载；0.7.1 的 installed-path Schema
+  探针确认 12 个 Task 字段、10 个必填 Checkpoint 字段完整可见，两个嵌套对象均
+  `additionalProperties: false`；
 - Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
   因仓库当前没有授权文件，本阶段不代替用户指定许可证；
 - `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
@@ -467,8 +476,9 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
   `should_compress()` 的 Request Pressure 才是 Emergency 触发的权威输入；
 - Hermes v0.20.5 自带 Python 当前链接 SQLite 3.50.4；插件已安全回退 DELETE
   journal，但后续可在独立维护窗口升级 Hermes/SQLite；
-- 真机尚未产生首次 Task/Handoff/Emergency 事件；这不是启动故障，真实开发任务
-  观察期间应保留数据库、归档和对应时间戳，异常时不要先清理证据。
+- 0.7.1 部署后尚未产生首次成功 Task/Handoff/Emergency 事件；用户已停止失败轮次，
+  等待从原 Desktop 会话重试。观察期间应保留数据库、归档和对应时间戳，异常时
+  不要先清理证据。
 
 ## 9. Rejected Alternatives
 
@@ -495,7 +505,8 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 P7 部署与初始观察已完成，接下来按真实工作负载持续验证：
 
-1. 用户直接运行一条范围较小的真实开发任务，无需人工制造超长 Context；
+1. 用户在原 Desktop 会话重新加载 `chris-hermes-agent:context-handoff` 并创建
+   当前真实开发 Task，确认 0.7.1 不再混淆 Task/Checkpoint 字段；
 2. 首次接近 Handoff 甜区时，核对 Runtime Status、Task、Checkpoint、Event 和
    Segment 是否可交叉追溯；
 3. 若实际触发 Emergency，保留 Archive、数据库和日志，成功后尽快补建正式

@@ -5,13 +5,15 @@
 - User-approved Policy: `gpt-5.6-sol` ratio Handoff `0.70`, Emergency enabled at
   `0.85`.
 - Runtime Context Limit: 272,000; resolved thresholds: 190,400 and 231,200 Token.
-- Installed immutable Commit:
-  `5adc9dc03fcb09957a6fefca32f74fcd2a7ba27d` (plugin `0.7.0`).
+- Current installed immutable Commit:
+  `cef29f6c8de531f06e724c32a3481204d3a7d4a5` (plugin `0.7.1`). This supersedes
+  the initial 0.7.0 deployment after a live Task/Checkpoint nested-Schema failure.
 - Protected pre-rollout backup:
   `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`.
 - `context.engine=context-handoff`; SOUL migration and installed-path Doctor passed.
-- `hermes-gateway-chris-avatar.service` restarted and remained active/running; initial
-  logs and plugin database checks showed no plugin failure.
+- `hermes-gateway-chris-avatar.service` and the Desktop `hermes-dashboard.service`
+  restarted and remained active/running; logs and plugin database checks showed no plugin
+  failure.
 - Current Hermes Python links SQLite 3.50.4, so the plugin intentionally selected
   `journal_mode=DELETE`; plugin data directory/database permissions are `0700/0600`.
 - No Task/Handoff/Emergency has yet been created by a real workload. Retain the backup,
@@ -138,6 +140,15 @@ journalctl --user -u hermes-gateway-chris-avatar.service --since '-5 minutes' \
   --no-pager
 ```
 
+Gateway and `hermes serve` are separate host processes. If Desktop or WebUI reaches this
+Profile through a long-running serve process, restart that service too so live Agent
+instances rebuild their System Prompt, tools, Skill registry, and ContextEngine snapshot:
+
+```bash
+systemctl --user restart hermes-dashboard.service
+systemctl --user is-active hermes-dashboard.service
+```
+
 Use a new, isolated Session for the live test. Verify a long Tool Loop, a stable-boundary
 Checkpoint/Handoff, continued work in the same Turn, old Tool Trace exclusion, and a second
 Gateway restart. Do not deliberately force Emergency by fabricating usage. If real request
@@ -178,6 +189,9 @@ systemctl --user is-active hermes-gateway-chris-avatar.service
 hermes -p chris-avatar config check
 hermes -p chris-avatar sessions stats
 ```
+
+If a Desktop/WebUI serve process was restarted for rollout, restart it after rollback as
+well; otherwise it may retain the rolled-back plugin and prompt snapshot in memory.
 
 Rollback intentionally preserves
 `plugin-data/chris-hermes-agent/data.db` and Emergency archives as diagnostic evidence. It

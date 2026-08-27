@@ -706,7 +706,7 @@ Doctor 均通过。
 
 完成标准：所有验收标准通过，并具备一键回滚路径。
 
-完成证据：123 个测试通过，总覆盖率 86.91%。真实 Hermes Host 测试覆盖 Tool
+完成证据：126 个测试通过，总覆盖率 87.11%。真实 Hermes Host 测试覆盖 Tool
 Schema Request Pressure、Compression no-progress 边界、Emergency 后正式
 Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安装测试通过
 标准 `plugins install`、installed-path Doctor、配置注入、ContextEngine 选择及
@@ -717,16 +717,23 @@ Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安�
 `api_version` 和 `config_schema` 仍保留。
 
 用户确认 `gpt-5.6-sol` 使用 ratio Handoff `0.70`、Emergency `0.85`。插件已从
-不可变 Commit `5adc9dc03fcb09957a6fefca32f74fcd2a7ba27d` 安装并启用，SOUL 规则已迁移，
+不可变 Commit `cef29f6c8de531f06e724c32a3481204d3a7d4a5` 安装并启用，SOUL 规则已迁移，
 `context.engine` 已切换为 `context-handoff`。按 272,000 Context Limit，运行时解析
 阈值为 190,400/231,200 Token。上线前快照位于
 `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`，Checksum 与
-SQLite 完整性通过；Gateway 重启后保持 active/running，启动日志无插件错误。
+SQLite 完整性通过；Gateway 与承载 Desktop 的 `hermes serve` 重启后均保持
+active/running，启动日志无插件错误。
 
 安全预检另发现当前 Hermes Python 链接 SQLite 3.50.4。最终实现会识别 SQLite
 WAL-reset 风险版本并在此环境使用 DELETE journal，同时将插件数据目录和数据库
 权限收紧为 `0700/0600`。初始线上库尚无 Task/Event/Segment，符合尚未运行真实
 开发任务的状态；首次真实 Handoff/Emergency 证据转入正常使用过程持续观察。
+
+首次 Desktop 真实任务在 0.7.0 暴露出 `task_state_manage.state` 与
+`checkpoint_create.checkpoint` 的嵌套 Schema 没有展开：模型连续混淆 Task
+`in_progress` 与 Checkpoint `current_state/rejected_alternatives`，插件正确拒绝且没有
+写入半成品。0.7.1 已公开两套完整闭合字段 Schema，在 Skill 中增加字段边界，并在
+`invalid_state` 中返回可恢复提示；installed-path 探针和真机双进程重启均通过。
 
 ## 15. 测试计划
 
@@ -807,7 +814,8 @@ WAL-reset 风险版本并在此环境使用 DELETE journal，同时将插件数�
 7. 使用配置检查命令验证 Policy；
 8. 合并 SOUL Handoff 规则，删除固定模型阈值和强制重开会话规则；
 9. 运行单元测试和离线集成测试；
-10. 重启 `hermes-gateway-chris-avatar.service`；
+10. 重启 `hermes-gateway-chris-avatar.service`；若 Desktop 通过长期运行的
+    `hermes serve` 访问该 Profile，同时重启对应 serve 服务；
 11. 初始观察通过后，使用真实小型开发任务持续观察 Runtime Status 和首次
     Handoff；
 12. 检查 Gateway 日志、Token Usage、Event Log 和 SQLite 状态；
