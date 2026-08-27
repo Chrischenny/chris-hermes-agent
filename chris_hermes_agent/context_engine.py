@@ -90,8 +90,9 @@ def _success(data: dict[str, object]) -> str:
 class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
     """ContextEngine with request observation and atomic Context rotation.
 
-    Task persistence remains owned by the Task layer. P4 rotates durable
-    Segment pointers and selects a request-only checkpoint bootstrap.
+    Task persistence and semantic classification remain owned by the Task layer.
+    The engine rotates durable Segment pointers and selects a request-only
+    checkpoint bootstrap.
     """
 
     emit_automatic_compaction_status = False

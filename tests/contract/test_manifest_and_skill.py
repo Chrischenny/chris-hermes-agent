@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -7,6 +8,15 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = PROJECT_ROOT / "plugin.yaml"
 SKILL_PATH = PROJECT_ROOT / "skills" / "context-handoff" / "SKILL.md"
+REFERENCE_PATHS = {
+    name: SKILL_PATH.parent / "references" / name
+    for name in (
+        "checkpoint-template.md",
+        "new-task-detection.md",
+        "task-state-rules.md",
+    )
+}
+SOUL_PATH = PROJECT_ROOT / "soul" / "SOUL-snippet.md"
 
 
 def _read_frontmatter(path: Path) -> dict:
@@ -25,7 +35,7 @@ def test_manifest_declares_native_standalone_plugin() -> None:
 
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
-    assert manifest["version"] == "0.4.0"
+    assert manifest["version"] == "0.5.0"
     assert manifest["manifest_version"] == 2
     assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
@@ -49,5 +59,73 @@ def test_bundled_skill_has_valid_identity() -> None:
     frontmatter = _read_frontmatter(SKILL_PATH)
 
     assert frontmatter["name"] == "context-handoff"
-    assert frontmatter["version"] == "0.1.0"
+    assert frontmatter["version"] == "0.2.0"
     assert "Context" in frontmatter["description"]
+
+
+def test_bundled_skill_routes_every_p5_workflow_reference() -> None:
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+
+    for name, path in REFERENCE_PATHS.items():
+        assert path.is_file()
+        assert f"references/{name}" in skill
+
+    for tool_name in (
+        "task_state_manage",
+        "task_event_append",
+        "checkpoint_create",
+        "handoff_context",
+    ):
+        assert tool_name in skill
+
+
+def test_task_workflow_references_define_classification_and_isolation_contracts() -> None:
+    detection = REFERENCE_PATHS["new-task-detection.md"].read_text(encoding="utf-8")
+    state_rules = REFERENCE_PATHS["task-state-rules.md"].read_text(encoding="utf-8")
+
+    for classification in (
+        "continuation",
+        "subtask",
+        "new_task",
+        "ambiguous",
+    ):
+        assert classification in detection
+    assert "before any state-changing tool call" in detection
+
+    for inheritable_field in ("constraints", "decisions", "artifacts"):
+        assert inheritable_field in state_rules
+    assert "Tool Trace" in state_rules
+    assert "context_rotation_required" in state_rules
+    assert "handoff_applied" in state_rules
+
+
+def test_checkpoint_reference_covers_runtime_required_fields() -> None:
+    checkpoint_reference = REFERENCE_PATHS["checkpoint-template.md"].read_text(
+        encoding="utf-8"
+    )
+
+    for field in (
+        "goal",
+        "constraints",
+        "current_phase",
+        "completed",
+        "current_state",
+        "decisions",
+        "rejected_alternatives",
+        "known_issues",
+        "artifacts",
+        "next_actions",
+    ):
+        assert field in checkpoint_reference
+    assert "checksum" in checkpoint_reference.lower()
+
+
+def test_soul_migration_uses_runtime_policy_without_fixed_thresholds() -> None:
+    soul = SOUL_PATH.read_text(encoding="utf-8")
+
+    assert "Runtime Status" in soul
+    assert "chris-hermes-agent:context-handoff" in soul
+    assert "handoff_context" in soul
+    assert "Next Actions" in soul
+    assert re.search(r"\b(?:gpt|claude|gemini|glm)-", soul, re.IGNORECASE) is None
+    assert re.search(r"\b\d+(?:\.\d+)?\s*(?:%|tokens?)\b", soul, re.IGNORECASE) is None

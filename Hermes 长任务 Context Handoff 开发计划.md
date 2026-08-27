@@ -4,7 +4,7 @@
 >
 > 目标 Profile：`chris-avatar`
 >
-> 文档状态：已确认，可进入开发
+> 文档状态：P5 已完成，下一阶段为 P6 Emergency Fallback
 
 ## 1. 已确认决策
 
@@ -550,8 +550,8 @@ Skill 负责：
 | P2 SQLite 与 Task State | 已完成 | 已实现持久化、任务工具、暂存、搜索和恢复 |
 | P3 Runtime Status 与 Token 观测 | 已完成 | 已实现请求级状态、估算/真实 Usage 和 Active Pointer 观测 |
 | P4 Context Rotation | 已完成 | 已实现原子 Segment 切换、Checkpoint Bootstrap 和同 Turn 继续 |
-| P5 Skill、SOUL 与任务隔离 | 下一阶段 | 依赖已满足，尚未开始 |
-| P6 Emergency Fallback | 未开始 | 依赖 P1、P3、P4 |
+| P5 Skill、SOUL 与任务隔离 | 已完成 | 已交付 Agent 工作流、SOUL 片段和任务隔离验证 |
+| P6 Emergency Fallback | 下一阶段 | 依赖已满足，尚未开始 |
 | P7 集成测试与上线 | 未开始 | 依赖全部开发阶段 |
 
 ### P0：工程骨架与契约测试
@@ -651,12 +651,22 @@ Doctor 均通过。
 
 ### P5：Skill、SOUL 与任务隔离
 
+状态：**已完成（2026-08-27）**
+
 - 编写 Handoff Skill；
 - 编写 SOUL 迁移片段；
 - 实现当前任务、子任务、新任务流程；
 - 增加 Checkpoint 质量检查。
 
 完成标准：新任务不会继承旧任务执行噪声，当前任务可以跨多次 Rotation 连续执行。
+
+完成证据：bundled Skill 已从阶段 Stub 改为完整 Agent 操作入口，并按需路由到
+Checkpoint 模板、任务分类和 Task State/继承规则；SOUL 迁移片段只读取当前
+Runtime Policy，不包含固定模型或固定阈值。当前任务延续、子任务白名单继承、
+完全新任务隔离、Resume 后显式 Rotation 和低置信度确认规则均有契约或集成验证；
+新 Task Rotation 后的 Provider Request 不包含旧 Task User History 或 Tool Trace。
+98 个测试通过，总覆盖率 86.49%，Ruff、Mypy strict、构建和隔离 Plugin Doctor
+均通过。
 
 ### P6：Emergency Fallback
 

@@ -131,7 +131,8 @@ class HandoffService:
                 if state.active_task_id != target_task_id:
                     raise HandoffServiceError(
                         "target_task_not_active",
-                        "P4 rotation requires target_task_id to be the active task.",
+                        "Context rotation requires target_task_id to be the "
+                        "active task.",
                     )
 
                 previous = self.repository.get_segment(expected_active_segment_id)

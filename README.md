@@ -3,11 +3,27 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository has completed **P4: Context Rotation**. The plugin persists
-profile-scoped task state, exposes an atomic `handoff_context` tool, and selects
-a checkpoint-based Context on the next Provider Request without ending the
-current Agent Turn. Emergency Compression remains disabled until its later
-phase.
+The repository has completed **P5: Skill, SOUL, and Task Isolation**. The
+plugin persists profile-scoped Task State, exposes an atomic `handoff_context`
+tool, and ships the Agent workflow that classifies task boundaries, creates
+quality-checked Checkpoints, and selects an isolated Context without ending the
+current Agent Turn. Emergency Compression remains disabled until P6.
+
+## Agent workflow
+
+The bundled `chris-hermes-agent:context-handoff` Skill now defines the complete
+operating sequence for current-task continuation, subtasks, independent new
+tasks, paused-task resume, ordinary Handoff decisions, and failure recovery.
+Low-confidence classification must be confirmed before a state-changing tool
+call. Read-only Task inspection and search remain available while waiting for
+that choice.
+
+Checkpoint guidance includes all runtime-required fields, a semantic quality
+self-check, Checksum/result validation, and the exact Handoff preflight. The
+companion [`SOUL-snippet.md`](./soul/SOUL-snippet.md) references only the
+current Runtime Policy and contains no fixed model, Token, or ratio threshold.
+It is a migration artifact for P7 and is not installed into `chris-avatar` by
+this development phase.
 
 ## Context rotation
 
@@ -84,6 +100,14 @@ returns `context_rotation_applied: false`, `context_rotation_required: true`,
 and `next_required_action: call_handoff_context`; the explicit Handoff call
 then performs the request-level Context switch.
 
+Task creation provides the P5 isolation boundary. An unfinished active Task
+must first have a valid Checkpoint; creation then pauses it and activates the
+target Task atomically. Subtasks record `parent_task_id` and inherit only
+explicitly selected constraints, decisions, and durable artifact references.
+Independent tasks inherit none of that state. In both cases the Agent creates a
+target-owned Checkpoint and explicitly rotates to the returned Task/Segment, so
+old Tool Trace is excluded from the next request.
+
 ## Development
 
 The contract suite runs against a Hermes Agent checkout:
@@ -97,11 +121,14 @@ HERMES_AGENT_ROOT="$HOME/.hermes/hermes-agent" \
 Run the complete verification suite:
 
 ```bash
+uv lock --check
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy chris_hermes_agent
 uv run pytest --cov=chris_hermes_agent --cov-report=term-missing
 uv build
-hermes plugins doctor . --ci
+hermes_temp_dir=$(mktemp -d)
+HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 ```
 
 See [the development plan](./Hermes%20长任务%20Context%20Handoff%20开发计划.md)
