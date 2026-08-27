@@ -20,6 +20,7 @@ def _status(**changes: object) -> RuntimeStatus:
         "emergency_threshold_tokens": 90_000,
         "active_task_id": "task-1",
         "active_segment_id": "segment-2",
+        "emergency_state": "not_triggered",
     }
     values.update(changes)
     return RuntimeStatus(**values)  # type: ignore[arg-type]
@@ -40,6 +41,7 @@ def test_runtime_status_renders_usage_policy_and_active_pointer() -> None:
     assert "Context handoff available: true" in content
     assert "Active task: task-1" in content
     assert "Context segment: segment-2" in content
+    assert "Emergency compression state: not_triggered" in content
 
 
 def test_runtime_status_does_not_invent_usage_policy_or_pointer() -> None:

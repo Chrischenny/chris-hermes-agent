@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-27
 >
-> 交接边界：P5 已完成，P6 尚未开始
+> 交接边界：P6 已完成，P7 尚未开始
 >
-> 下一阶段：P6 Emergency Fallback
+> 下一阶段：P7 集成测试与 Profile 上线
 
 ## 1. Task
 
@@ -17,6 +17,7 @@
 - P3 实现提交：`bfb862e feat: add runtime context status observation`
 - P4 实现提交：`5b9d06f feat: add atomic context rotation`
 - P5 实现提交：`bd71a47 feat: add task isolation handoff workflow`
+- P6 实现提交：待本次实现提交后回填
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -138,7 +139,7 @@ closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-
   误用历史 Tool Call；
 - ContextEngine 只旋转当前 Active Task；新任务、子任务与 Resume 先由 Skill/Task
   层完成持久化 Active Pointer 编排，再显式 Rotation；
-- 普通 Compression 继续关闭，Emergency Delegate 属于 P6。
+- 普通 Compression 继续关闭，只有显式 Emergency Policy 能启用 Delegate。
 
 ### 4.7 Agent 工作流与任务隔离
 
@@ -153,6 +154,23 @@ closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-
 - Resume 更新 Pointer 后仍必须显式 Rotation，不能把 Task 激活当作 Context 已切换；
 - `soul/SOUL-snippet.md` 只引用 Runtime Status 中当前模型的 Policy，不包含固定
   模型、Token 或比例阈值。
+
+### 4.8 Emergency Fallback 边界
+
+- `threshold_tokens` 只反映当前模型显式启用的 Emergency 阈值；甜区仍只用于
+  Agent 主动 Handoff 决策；
+- Host 按包含 Tool Schema 的 Request Pressure 调用 `should_compress()`，插件只在
+  已绑定 Active Task/Segment、已有 Request Snapshot 且阈值到达时返回 `True`；
+- 完整 Active Request 先归档到 Profile 插件数据目录，再调用 Hermes 原生
+  `ContextCompressor`，不复制其压缩算法；
+- Delegate 结果重新估算并要求严格低于同一 Emergency 阈值；失败、无进展和仍
+  超限都 fail closed；
+- 成功结果只缓存为下一次 `select_context()` 的 Request Selection；`compress()`
+  向 Host 返回原 canonical conversation 对象，阻止 Session Boundary Rewrite；
+- 归档同时保存压缩前和压缩后消息、Conversation Anchor 和 SHA-256 Checksum，
+  重启后恢复压缩 Selection 并追加 Anchor 后的新消息；
+- 归档目录/文件权限为 `0700/0600`，文件名为随机 UUID；Event 只包含引用、
+  Checksum、Token 计数和安全错误码，不包含 Context 或 Provider 异常详情。
 
 ## 5. Completed
 
@@ -248,22 +266,46 @@ P5 已完成：
 - 新增任务延续、子任务继承、完全新任务隔离和 Resume Rotation 集成测试；
 - 更新 README 和开发计划并提交 P5。
 
+P6 已完成：
+
+- 将插件版本更新到 `0.6.0`，bundled Skill 版本更新到 `0.3.0`；
+- 新增 `emergency.py`，实现 not_triggered/triggered/completed/failed 状态机；
+- 将 Host Compression 阈值从普通 Handoff 甜区改为显式 Emergency 阈值；
+- 在 Delegate 调用前安全归档完整 Active Request，并将引用绑定到 Context Segment；
+- 复用 Hermes `ContextCompressor`，重新验证压缩结果低于配置阈值；
+- 新增 Triggered/Completed/Failed Event，所有 Event Payload 均不含 Context；
+- 成功时保持 canonical Session History 原对象和原内容，只替换后续 Request
+  Selection；
+- 支持重启恢复、Conversation Anchor 后 Tail 追加、损坏归档拒绝和重复触发阻止；
+- Runtime Status 展示 Emergency 状态，Skill 要求成功后尽快补建正式
+  Checkpoint/Handoff；
+- 覆盖成功、异常、无进展、仍超限、归档损坏、存储失败、模型/Policy 切换和
+  重启恢复。
+
 ## 6. Current State
 
-P5 已完成 Agent 工作流与任务隔离，P6 Emergency Fallback 尚未实现：
+P6 已完成 Emergency Fallback，P7 集成测试与 Profile 上线尚未开始：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
-- `threshold_tokens` 只反映已匹配且有效的普通 Handoff 起点；
+- `threshold_tokens` 只反映已匹配且显式启用的 Emergency 阈值；
 - 无配置或无效配置时 `observation_only=True` 且阈值清零；
-- `ContextHandoffEngine.should_compress()` 恒为 `False`；
-- `compress()` 严格原样返回输入消息列表；
+- `should_compress()` 在无 Policy、阈值未到、无 Active Pointer、状态已完成/失败或
+  Delegate 不可用时 fail closed；
+- `compress()` 归档并压缩 Active Request，但始终把 canonical conversation 原对象
+  返回 Host，避免 Hermes Session Rewrite；
+- `emergency.py` 保存完整压缩前/后 Request、Anchor、状态与 Checksum；
+- Profile 归档位于 `plugin-data/chris-hermes-agent/archives/`，使用随机文件名和
+  `0700/0600` 权限；
+- Runtime Status 展示 Emergency 的 not_triggered/triggered/completed/failed 状态；
+- Delegate 结果必须重新估算并低于用户阈值，否则记录安全失败码；
+- 完成后的 Request Selection 可在 Gateway/Engine 重启后从归档恢复；
 - 初始 Segment 仍使用完整 conversation；带 Checkpoint 的 Active Segment 会使用
   Checkpoint Bootstrap 和 `start_message_index` 之后的新 Tail；
 - `select_context()` 每次返回新的 Request 列表，并在尾部加入一条最新 Runtime
   Status；
 - 原消息列表、System Prompt、稳定 Prefix 和 Hermes Session History 不被修改；
 - Runtime Status 包含模型、Context Limit、估算/真实 Token、Policy 来源与阈值、
-  Active Task 和 Segment；
+  Active Task/Segment 和 Emergency 状态；
 - `estimated_prompt_tokens` 使用 Hermes 消息粗估接口并包含 Runtime Status 自身；
 - `last_prompt_tokens` 只代表最近一次 Provider 真实 Usage；缺失时明确不可用；
 - `task_state_manage`、`task_event_append`、`checkpoint_create` 已可用；
@@ -276,14 +318,15 @@ P5 已完成 Agent 工作流与任务隔离，P6 Emergency Fallback 尚未实现
   Actions 和 `handoff_applied: true`；
 - Handoff 仍只允许目标 Task 等于当前 Active Task；bundled Skill 会先创建或恢复
   目标 Task 并更新 Active Pointer，再使用目标 Checkpoint 执行 Rotation；
-- `skills/context-handoff/SKILL.md` 已是完整 P5 工作流，并按需路由三个 reference；
+- `skills/context-handoff/SKILL.md` 已包含 P6 Emergency 后正式 Handoff 工作流；
 - 当前任务延续不会创建新 Task 或 Rotation；
 - 子任务会记录 `parent_task_id`，只继承显式选择的白名单状态；
 - 独立新任务不继承旧任务结构化状态，Rotation 后也不包含旧 User History 或
   Tool Trace；
 - 低置信度分类和多个相近 Resume 候选会在改变状态前要求用户确认；
 - `soul/SOUL-snippet.md` 已准备好但尚未合并到 `chris-avatar/SOUL.md`；
-- 不会调用 Hermes 默认 Compression；
+- 普通路径不会调用 Hermes 默认 Compression；显式 Emergency 路径委托给 Hermes
+  原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
 - 未安装到 `chris-avatar`。
 
@@ -294,6 +337,7 @@ P5 已完成 Agent 工作流与任务隔离，P6 Emergency Fallback 尚未实现
 - `chris_hermes_agent/plugin.py`
 - `chris_hermes_agent/context_engine.py`
 - `chris_hermes_agent/context_builder.py`
+- `chris_hermes_agent/emergency.py`
 - `chris_hermes_agent/handoff_service.py`
 - `chris_hermes_agent/token_usage.py`
 - `chris_hermes_agent/models.py`
@@ -318,19 +362,21 @@ P5 已完成 Agent 工作流与任务隔离，P6 Emergency Fallback 尚未实现
 - `tests/unit/test_token_usage.py`
 - `tests/unit/test_store.py`
 - `tests/unit/test_task_service.py`
+- `tests/unit/test_emergency.py`
 - `tests/integration/test_task_tools.py`
 - `tests/integration/test_runtime_status.py`
 - `tests/integration/test_context_rotation.py`
 - `tests/integration/test_task_isolation.py`
+- `tests/integration/test_emergency_fallback.py`
 - `tests/integration/test_plugin_doctor.py`
 - `pyproject.toml`
 
 ## 7. Verification Evidence
 
-P5 最终验证结果：
+P6 最终验证结果：
 
-- 98 个单元/契约/集成测试全部通过；
-- 总覆盖率 86.49%，超过 80% 门槛；
+- 110 个单元/契约/集成测试全部通过；
+- 总覆盖率 86.94%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -367,12 +413,12 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
 - Resume Tool 不直接执行 Rotation；它返回明确的下一步，Agent 必须再调用
   `handoff_context`；
 - 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
-- Emergency Fallback 尚未实现；`should_compress()` 仍恒为 `False`，`compress()`
-  仍原样返回输入；
-- 尚未实现压缩前 Context 归档、Hermes Compression Delegate、压缩后安全范围
-  验证及两个 Emergency Event；
-- Runtime Status 会展示已解析的 Emergency Policy 阈值，但 P6 完成前该字段只是
-  Policy 元数据，不代表 Emergency 已可执行；
+- Emergency 归档包含完整 Active Request，可能含敏感信息；权限和 Checksum 已
+  收紧，但 P7 上线前仍需确认 Profile 目录备份、保留和清理策略；
+- Emergency 成功后 canonical Session 保持完整，后续请求使用归档中的压缩
+  Selection；Agent 仍需尽快补建正式 Checkpoint 并执行普通 Handoff；
+- `select_context()` 的消息估算不含 Tool Schema Token；Hermes Host 传给
+  `should_compress()` 的 Request Pressure 才是 Emergency 触发的权威输入；
 - `chris-avatar` 仍使用 Hermes 默认 ContextEngine；
 - `chris-avatar/SOUL.md` 尚未迁移。
 
@@ -399,41 +445,31 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P6 开始，建议严格按以下顺序：
+新会话从 P7 开始，建议严格按以下顺序：
 
-1. 阅读本交接文件、开发计划 P6 和 Hermes 当前 ContextEngine/Compression
-   Delegate 实现；
-2. 检查 `git status`，确认 `main` 与 `origin/main` 同步；
-3. 使用 `tdd-workflow` 先定义无 Policy、Emergency 未启用、阈值未到、阈值到达、
-   Delegate 成功/失败和压缩后仍超限场景；
-4. 调研 Hermes `Compressor` 或 Compression Delegate 的稳定调用边界，避免复制
-   Hermes 内部压缩实现；
-5. 设计压缩前 Active Context 归档格式与插件数据目录位置，归档必须可追溯且不得
-   写入插件安装目录；
-6. 仅在当前 Policy 明确 `emergency_enabled` 且达到其配置阈值时让
-   `should_compress()` 返回 `True`；无匹配或无效 Policy 继续 fail closed；
-7. 在 Emergency 流程中依次归档、记录
-   `EMERGENCY_COMPRESSION_TRIGGERED`、调用 Delegate、验证结果并记录
-   `EMERGENCY_COMPRESSION_COMPLETED`；
-8. 为失败路径定义可诊断结果，绝不把失败压缩伪装成成功或删除 canonical
-   Session History；
-9. 在 Runtime Status 标记当前 Segment 是否发生过 Emergency Compression，并让
-   bundled Skill 在稳定后补建正式 Checkpoint/Handoff；
-10. 覆盖重启恢复、模型切换、Policy 切换、归档校验和普通 Handoff 优先级；
-11. 运行完整 P0～P5 回归、覆盖率、类型检查、构建和隔离 Plugin Doctor；
-12. 更新版本、README、Skill、计划与本交接文档，提交并推送 P6。
+1. 阅读本交接文件、开发计划 P7 和上线/回滚步骤；
+2. 检查 `git status`、`origin/main`、Hermes 当前 Commit 和 Gateway 状态；
+3. 在不触碰 `chris-avatar` 的隔离 Profile 中补齐真实长 Tool Loop、连续至少
+   10 次 Rotation、Emergency 后正式 Handoff 和 Gateway 重启测试；
+4. 验证真实 Hermes Host 的 Tool Schema Pressure、Compression no-progress
+   boundary 和下一次 `select_context()` 行为；
+5. 验证 Prompt Cache Prefix、模型/Provider 切换、Policy 热切换和归档恢复；
+6. 制定归档保留/清理策略，确认备份内容和一键回滚命令；
+7. 向用户确认 `gpt-5.6-sol` 的实际甜区和 Emergency Policy 数值；
+8. 在获得上线授权后备份 `chris-avatar` 的 config、SOUL、state 和 Session 索引；
+9. 安装插件、迁移 SOUL、启用 `context.engine: context-handoff`，先做配置检查；
+10. 重启 Gateway，用隔离 Session 观察日志、Token、Event、Segment 和 Archive；
+11. 完成验收或执行回滚，不删除插件 SQLite 和 Emergency 诊断归档；
+12. 更新最终版本、README、计划与交接文档，提交并推送 P7。
 
-## 11. P6 Acceptance Criteria
+## 11. P7 Acceptance Criteria
 
-- 只有当前模型匹配且有效、并显式启用 Emergency 的 Policy 能触发兜底；
-- Emergency 阈值完全来自用户配置，代码、SOUL 和 Skill 不提供固定默认值；
-- 普通 Agent Handoff 保持优先，Emergency 只是逼近硬上限时的最后保护；
-- 压缩前完整 Active Context 归档到 Profile 插件数据目录并可追溯；
-- Triggered/Completed Event 顺序、Task、Session 和 Segment 关联正确；
-- Hermes Compression Delegate 的成功、失败和异常路径均 fail closed；
-- 压缩后 Request 必须重新估算并验证回到安全范围，不能只相信 Delegate 返回；
-- Runtime Status 能区分未发生、已触发、已完成和失败状态；
-- Emergency 不删除或改写 Hermes canonical Session History；
-- Emergency 后 bundled Skill 要求尽快创建正式 Checkpoint 并主动 Handoff；
-- P0～P5 全部测试继续通过；
-- 不修改、安装或重启 `chris-avatar`。
+- P6 的显式 Policy、归档、Delegate、验证、恢复和 canonical History 约束在真实
+  Hermes Host 中成立；
+- 普通路径优先 Handoff，Emergency 后能尽快补建正式 Checkpoint/Rotation；
+- 连续至少 10 次 Rotation、长 Tool Loop、模型切换和 Gateway 重启通过；
+- Runtime Status、Task/Event/Checkpoint/Segment 与 Archive 可交叉追溯；
+- `chris-avatar` 的 Policy 数值由用户确认，不引入代码/SOUL 默认阈值；
+- 上线前完成备份，出现异常时能一键恢复 Hermes 默认 Compressor 和原配置；
+- 插件异常不得静默改写或破坏 Hermes Session；
+- 上线变更需得到用户明确授权。

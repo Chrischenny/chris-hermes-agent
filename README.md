@@ -3,11 +3,13 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository has completed **P5: Skill, SOUL, and Task Isolation**. The
+The repository has completed **P6: Emergency Fallback**. The
 plugin persists profile-scoped Task State, exposes an atomic `handoff_context`
 tool, and ships the Agent workflow that classifies task boundaries, creates
 quality-checked Checkpoints, and selects an isolated Context without ending the
-current Agent Turn. Emergency Compression remains disabled until P6.
+current Agent Turn. A model policy may now explicitly enable a last-resort,
+request-only Emergency Compression path without rewriting canonical Session
+history.
 
 ## Agent workflow
 
@@ -80,6 +82,26 @@ plugins:
 No model threshold is supplied by the plugin. Invalid or unmatched policies
 produce diagnostic state and keep Handoff and Emergency behavior disabled.
 
+## Emergency fallback
+
+The host compression threshold is sourced only from the resolved, explicitly
+enabled Emergency policy. At that boundary the plugin archives the complete
+active Provider Request, records a Triggered event, and delegates summarization
+to Hermes' `ContextCompressor`. It independently re-estimates the returned
+request and accepts it only when it is below the configured Emergency threshold.
+
+The compressed selection is request-local. `compress()` returns the original
+canonical conversation unchanged, while the next `select_context()` serves the
+verified compressed request plus messages added after the archive anchor.
+Completed state is restored from the archive after a process restart. Delegate,
+archive, corrupt-state, no-progress, and still-over-threshold failures are
+fail-closed and surfaced with safe codes in Runtime Status.
+
+Archives use random names under the Profile plugin data `archives/` directory,
+with directory/file permissions `0700`/`0600`, a content checksum, and
+Triggered/Completed/Failed events that contain metadata only. Active Context or
+provider error text is never copied into the Event Log.
+
 ## Task lifecycle
 
 `task_state_manage` supports `create`, `get`, `update`, `pause`, `search`,
@@ -92,6 +114,7 @@ Runtime data is created lazily through Hermes `plugin_db()` at:
 
 ```text
 <HERMES_HOME>/plugin-data/chris-hermes-agent/data.db
+<HERMES_HOME>/plugin-data/chris-hermes-agent/archives/<random>.json
 ```
 
 SQLite runs with WAL, foreign keys, a busy timeout, versioned migrations, and

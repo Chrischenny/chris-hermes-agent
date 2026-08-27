@@ -8,6 +8,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -84,6 +85,9 @@ class TaskRepository:
             "SELECT value FROM plugin_metadata WHERE key = 'search_backend'"
         ).fetchone()
         self.search_backend = str(row[0]) if row is not None else "fallback"
+        database_row = self._connection.execute("PRAGMA database_list").fetchone()
+        database_name = str(database_row[2]) if database_row is not None else ""
+        self.database_path = Path(database_name) if database_name else None
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -366,6 +370,34 @@ class TaskRepository:
                 (task_id,),
             ).fetchone()
         return self._segment_from_row(row) if row is not None else None
+
+    def update_segment_archive_reference(
+        self,
+        segment_id: str,
+        archive_reference: str,
+    ) -> ContextSegmentRecord:
+        """Attach one immutable Emergency archive to an open Context Segment."""
+        cursor = self._connection.execute(
+            """
+            UPDATE context_segments
+            SET archived_context_reference = ?
+            WHERE context_segment_id = ?
+              AND end_time IS NULL
+              AND (
+                archived_context_reference IS NULL
+                OR archived_context_reference = ?
+              )
+            """,
+            (archive_reference, segment_id, archive_reference),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrentUpdateError(
+                f"Context Segment {segment_id!r} already has another archive."
+            )
+        segment = self.get_segment(segment_id)
+        if segment is None:  # pragma: no cover - guarded by successful update
+            raise RuntimeError("Updated Context Segment disappeared.")
+        return segment
 
     def close_segment(
         self,

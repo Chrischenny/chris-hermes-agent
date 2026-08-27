@@ -6,6 +6,8 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from agent.context_engine import ContextEngine
@@ -15,6 +17,13 @@ from .context_builder import (
     append_runtime_status,
     build_handoff_context,
 )
+from .emergency import (
+    CompressionDelegate,
+    EmergencyCompressionService,
+    EmergencyCompressionStatus,
+    EmergencyState,
+    RestoredEmergencyContext,
+)
 from .handoff_service import HandoffService, HandoffServiceError
 from .models import PolicyResolution
 from .policy import PolicyResolver
@@ -23,6 +32,15 @@ from .task_models import SessionContextState
 from .token_usage import ProviderTokenUsage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectionSnapshot:
+    messages: list[dict[str, Any]]
+    conversation_message_count: int
+    task_id: str
+    context_segment_id: str
+
 
 HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
     "name": "handoff_context",
@@ -103,6 +121,8 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         *,
         repository: TaskRepository | None = None,
         repository_provider: Callable[[], TaskRepository] | None = None,
+        compression_delegate: CompressionDelegate | None = None,
+        emergency_archive_directory: Path | str | None = None,
     ) -> None:
         self.last_prompt_tokens = 0
         self.last_completion_tokens = 0
@@ -119,6 +139,23 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         self._session_id: str | None = None
         self._repository = repository
         self._repository_provider = repository_provider
+        self._compression_delegate = compression_delegate
+        self._owns_compression_delegate = compression_delegate is None
+        self._emergency_archive_directory = (
+            Path(emergency_archive_directory)
+            if emergency_archive_directory is not None
+            else None
+        )
+        self._emergency_service: EmergencyCompressionService | None = None
+        self._emergency_status = EmergencyCompressionStatus()
+        self._emergency_context: RestoredEmergencyContext | None = None
+        self._emergency_segment_id: str | None = None
+        self._selection_snapshot: _SelectionSnapshot | None = None
+        self._last_compress_aborted = False
+        self._last_summary_error: str | None = None
+        self._base_url = ""
+        self._api_key = ""
+        self._api_mode = ""
         self._policy_resolver = PolicyResolver(
             {} if policy_config is None else policy_config
         )
@@ -141,6 +178,10 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         self.last_prompt_tokens = self.last_usage.prompt_tokens or 0
         self.last_completion_tokens = self.last_usage.completion_tokens or 0
         self.last_total_tokens = self.last_usage.total_tokens or 0
+        delegate = self._compression_delegate
+        update = getattr(delegate, "update_from_response", None)
+        if callable(update):
+            update(usage)
 
     def update_model(
         self,
@@ -152,26 +193,30 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         api_mode: str = "",
     ) -> None:
         """Re-resolve user policy whenever Hermes changes model metadata."""
-        del base_url, api_key, api_mode
         if self.current_model and (
             model != self.current_model or provider != self.current_provider
         ):
             self._clear_usage()
         self.current_model = model
         self.current_provider = provider
+        self._base_url = base_url
+        self._api_key = api_key
+        self._api_mode = api_mode
         self.context_length = context_length
         self.policy_resolution = self._policy_resolver.resolve(
             model=model,
             provider=provider,
             context_limit=context_length,
         )
-        threshold = self.policy_resolution.handoff_threshold_tokens
+        threshold = self.policy_resolution.emergency_threshold_tokens
         self.threshold_tokens = threshold or 0
         self.threshold_percent = (
             self.threshold_tokens / context_length
             if self.threshold_tokens and context_length > 0
             else 0.0
         )
+        if self._owns_compression_delegate:
+            self._compression_delegate = None
         if self.policy_resolution.errors:
             for error in self.policy_resolution.errors:
                 logger.warning(
@@ -231,6 +276,28 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                     checkpoint=checkpoint,
                     diagnostic=diagnostic,
                 )
+        conversation = conversation_messages or []
+        if repository is not None and active_task_id and active_segment_id:
+            self._sync_emergency_state(
+                active_task_id,
+                active_segment_id,
+            )
+            if self._emergency_context is not None:
+                anchor = self._emergency_context.conversation_message_count
+                if 0 <= anchor <= len(conversation):
+                    selected_base = [
+                        *self._emergency_context.messages,
+                        *conversation[anchor:],
+                    ]
+                else:
+                    self._emergency_context = None
+                    self._emergency_status = EmergencyCompressionStatus(
+                        state=EmergencyState.FAILED,
+                        archive_reference=(self._emergency_status.archive_reference),
+                        error_code="conversation_anchor_invalid",
+                    )
+        else:
+            self._reset_emergency_state()
         resolution = self.policy_resolution
         selected, estimated = append_runtime_status(
             selected_base,
@@ -244,10 +311,20 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                 emergency_threshold_tokens=resolution.emergency_threshold_tokens,
                 active_task_id=active_task_id,
                 active_segment_id=active_segment_id,
+                emergency_state=self._emergency_status.runtime_label,
                 policy_diagnostics=tuple(error.code for error in resolution.errors),
             ),
         )
         self.estimated_prompt_tokens = estimated
+        if active_task_id is not None and active_segment_id is not None:
+            self._selection_snapshot = _SelectionSnapshot(
+                messages=selected,
+                conversation_message_count=len(conversation),
+                task_id=active_task_id,
+                context_segment_id=active_segment_id,
+            )
+        else:
+            self._selection_snapshot = None
         self._awaiting_usage = True
         return selected
 
@@ -256,6 +333,7 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         del kwargs
         if session_id != self._session_id:
             self._clear_usage()
+            self._reset_emergency_state()
         self._session_id = session_id
 
     def on_session_reset(self) -> None:
@@ -265,11 +343,37 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         self.estimated_prompt_tokens = 0
         self.last_usage = ProviderTokenUsage()
         self._awaiting_usage = False
+        self._reset_emergency_state()
 
     def should_compress(self, prompt_tokens: int | None = None) -> bool:
-        """Disable automatic compression until an explicit policy exists."""
-        del prompt_tokens
-        return False
+        """Trigger only at an explicit Emergency policy boundary."""
+        decision, _ = self.should_compress_info(prompt_tokens)
+        return decision
+
+    def should_compress_info(
+        self, prompt_tokens: int | None = None
+    ) -> tuple[bool, str | None]:
+        if self.threshold_tokens <= 0:
+            return False, "emergency_policy_disabled"
+        if self._emergency_status.state is EmergencyState.COMPLETED:
+            return False, "emergency_completed"
+        if self._emergency_status.state is EmergencyState.TRIGGERED:
+            return False, "emergency_interrupted"
+        if self._emergency_status.state is EmergencyState.FAILED:
+            code = self._emergency_status.error_code or "unknown"
+            return False, f"emergency_failed:{code}"
+        if self._session_id is None:
+            return False, "emergency_missing_session"
+        if self._selection_snapshot is None:
+            return False, "emergency_missing_selection"
+        if self._get_compression_delegate() is None:
+            return False, "emergency_delegate_unavailable"
+        observed = (
+            prompt_tokens if prompt_tokens is not None else self.estimated_prompt_tokens
+        )
+        if observed < self.threshold_tokens:
+            return False, "emergency_below_threshold"
+        return True, "emergency_threshold_reached"
 
     def compress(
         self,
@@ -279,8 +383,49 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         force: bool = False,
         memory_context: str = "",
     ) -> list[dict[str, Any]]:
-        """Return the exact input list until Emergency Fallback is implemented."""
-        del current_tokens, focus_topic, force, memory_context
+        """Compress request-only Context while preserving canonical messages."""
+        del focus_topic, force, memory_context
+        observed = current_tokens or self.estimated_prompt_tokens
+        should_compress, _ = self.should_compress_info(observed)
+        snapshot = self._selection_snapshot
+        delegate = self._get_compression_delegate()
+        if not should_compress or snapshot is None or delegate is None:
+            self._last_compress_aborted = True
+            return messages
+        if self._session_id is None:  # pragma: no cover - guarded by decision
+            self._last_compress_aborted = True
+            return messages
+        try:
+            service = self._get_emergency_service()
+            result = service.compress(
+                session_id=self._session_id,
+                task_id=snapshot.task_id,
+                context_segment_id=snapshot.context_segment_id,
+                active_messages=snapshot.messages,
+                conversation_message_count=snapshot.conversation_message_count,
+                request_tokens=observed,
+                emergency_threshold_tokens=self.threshold_tokens,
+                policy_snapshot=self._policy_snapshot(),
+                delegate=delegate,
+            )
+        except Exception:  # fail closed at the plugin/host persistence boundary
+            self._emergency_status = EmergencyCompressionStatus(
+                state=EmergencyState.FAILED,
+                error_code="emergency_unavailable",
+            )
+            self._last_compress_aborted = True
+            self._last_summary_error = "emergency_unavailable"
+            return messages
+        self._emergency_status = result.status
+        self._emergency_segment_id = snapshot.context_segment_id
+        self._last_compress_aborted = not result.applied
+        self._last_summary_error = result.status.error_code
+        if result.applied:
+            self._emergency_context = RestoredEmergencyContext(
+                messages=result.compressed_messages,
+                conversation_message_count=snapshot.conversation_message_count,
+            )
+            self.compression_count += 1
         return messages
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
@@ -352,6 +497,79 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             repository = self._repository_provider()
             self._repository = repository
         return repository
+
+    def _get_emergency_service(self) -> EmergencyCompressionService:
+        if self._emergency_service is None:
+            repository = self._get_repository()
+            directory = self._emergency_archive_directory
+            if directory is None:
+                database_path = repository.database_path
+                if database_path is None:
+                    raise RuntimeError(
+                        "Emergency archive directory is unavailable for "
+                        "an in-memory database."
+                    )
+                directory = database_path.parent / "archives"
+            self._emergency_service = EmergencyCompressionService(
+                repository,
+                archive_directory=directory,
+            )
+        return self._emergency_service
+
+    def _get_compression_delegate(self) -> CompressionDelegate | None:
+        if self._compression_delegate is not None:
+            return self._compression_delegate
+        try:
+            from agent.context_compressor import ContextCompressor
+
+            self._compression_delegate = ContextCompressor(
+                model=self.current_model,
+                threshold_percent=self.threshold_percent,
+                quiet_mode=True,
+                base_url=self._base_url,
+                api_key=self._api_key,
+                config_context_length=self.context_length,
+                provider=self.current_provider,
+                api_mode=self._api_mode,
+                abort_on_summary_failure=True,
+                threshold_tokens_cap=self.threshold_tokens or None,
+            )
+        except Exception:  # fail closed at the external Hermes delegate boundary
+            logger.warning("Hermes ContextCompressor delegate is unavailable.")
+            return None
+        return self._compression_delegate
+
+    def _sync_emergency_state(
+        self,
+        task_id: str,
+        segment_id: str,
+    ) -> None:
+        if self._emergency_segment_id == segment_id:
+            return
+        self._emergency_segment_id = segment_id
+        self._emergency_context = None
+        self._emergency_status = EmergencyCompressionStatus()
+        try:
+            restored, status = self._get_emergency_service().restore(
+                task_id,
+                segment_id,
+            )
+        except (OSError, RuntimeError, sqlite3.Error):
+            self._emergency_status = EmergencyCompressionStatus(
+                state=EmergencyState.FAILED,
+                error_code="archive_unavailable",
+            )
+            return
+        self._emergency_context = restored
+        self._emergency_status = status
+
+    def _reset_emergency_state(self) -> None:
+        self._emergency_status = EmergencyCompressionStatus()
+        self._emergency_context = None
+        self._emergency_segment_id = None
+        self._selection_snapshot = None
+        self._last_compress_aborted = False
+        self._last_summary_error = None
 
     def _session_repository_state(
         self,

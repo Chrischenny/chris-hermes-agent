@@ -136,7 +136,7 @@ def test_engine_rejects_unknown_context_tool() -> None:
     assert result["error"]["code"] == "unknown_tool"
 
 
-def test_model_switch_re_resolves_policy_without_enabling_compression() -> None:
+def test_model_switch_uses_only_explicit_emergency_as_host_threshold() -> None:
     from chris_hermes_agent.context_engine import ContextHandoffEngine
 
     engine = ContextHandoffEngine(
@@ -145,6 +145,11 @@ def test_model_switch_re_resolves_policy_without_enabling_compression() -> None:
                 "model-a": {
                     "handoff_enabled": True,
                     "sweet_zone": {"type": "ratio", "start": 0.5},
+                    "emergency": {
+                        "enabled": True,
+                        "type": "ratio",
+                        "threshold": 0.9,
+                    },
                 },
                 "model-b": {
                     "handoff_enabled": True,
@@ -162,7 +167,7 @@ def test_model_switch_re_resolves_policy_without_enabling_compression() -> None:
 
     assert first_resolution.match_source == "exact:model:model-a"
     assert first_resolution.handoff_threshold_tokens == 50_000
-    assert engine.threshold_tokens == 50_000
+    assert engine.threshold_tokens == 90_000
     assert engine.should_compress(99_999) is False
 
     engine.update_model("model-b", 80_000, provider="provider-b")
@@ -170,7 +175,7 @@ def test_model_switch_re_resolves_policy_without_enabling_compression() -> None:
     assert engine.policy_resolution is not first_resolution
     assert engine.policy_resolution.match_source == "exact:model:model-b"
     assert engine.policy_resolution.handoff_threshold_tokens == 30_000
-    assert engine.threshold_tokens == 30_000
+    assert engine.threshold_tokens == 0
     assert engine.context_length == 80_000
     assert engine.should_compress(99_999) is False
 
@@ -193,7 +198,7 @@ def test_unmatched_or_invalid_model_policy_clears_previous_threshold() -> None:
         }
     )
     engine.update_model("valid", 100_000)
-    assert engine.threshold_tokens == 50_000
+    assert engine.threshold_tokens == 0
 
     engine.update_model("unmatched", 100_000)
     assert engine.threshold_tokens == 0

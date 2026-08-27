@@ -4,7 +4,7 @@
 >
 > 目标 Profile：`chris-avatar`
 >
-> 文档状态：P5 已完成，下一阶段为 P6 Emergency Fallback
+> 文档状态：P6 已完成，下一阶段为 P7 集成测试与上线
 
 ## 1. 已确认决策
 
@@ -551,8 +551,8 @@ Skill 负责：
 | P3 Runtime Status 与 Token 观测 | 已完成 | 已实现请求级状态、估算/真实 Usage 和 Active Pointer 观测 |
 | P4 Context Rotation | 已完成 | 已实现原子 Segment 切换、Checkpoint Bootstrap 和同 Turn 继续 |
 | P5 Skill、SOUL 与任务隔离 | 已完成 | 已交付 Agent 工作流、SOUL 片段和任务隔离验证 |
-| P6 Emergency Fallback | 下一阶段 | 依赖已满足，尚未开始 |
-| P7 集成测试与上线 | 未开始 | 依赖全部开发阶段 |
+| P6 Emergency Fallback | 已完成 | 已实现安全归档、Hermes Delegate、验证和恢复 |
+| P7 集成测试与上线 | 下一阶段 | 开发依赖已满足，尚未开始 |
 
 ### P0：工程骨架与契约测试
 
@@ -670,12 +670,24 @@ Runtime Policy，不包含固定模型或固定阈值。当前任务延续、子
 
 ### P6：Emergency Fallback
 
+状态：**已完成（2026-08-27）**
+
 - 实现 Emergency Policy；
 - 实现压缩前归档；
 - 封装 Hermes Compression Delegate；
 - 实现恢复验证和事件记录。
 
 完成标准：只有显式启用的模型策略能够触发兜底，且压缩前原始 Context 可追溯。
+
+完成证据：ContextEngine 的 Host Compression 阈值只使用当前模型显式配置的
+Emergency Policy；完整 Active Provider Request 先以随机文件名、Checksum 和
+`0700/0600` 权限归档，再调用 Hermes `ContextCompressor` Delegate。返回结果会
+重新估算并要求低于同一配置阈值；成功、Delegate 异常、无进展、仍超限、归档
+损坏和存储失败均有 fail-closed 测试。成功后只替换下一次 Request Selection，
+canonical Session History 保持原对象和原内容，重启后可从归档恢复。Runtime
+Status 和 Triggered/Completed/Failed Event 提供不含 Context/异常详情的安全状态。
+110 个测试通过，总覆盖率 86.94%，Ruff、Mypy strict、构建和隔离 Plugin
+Doctor 均通过。
 
 ### P7：集成测试与 Profile 上线
 

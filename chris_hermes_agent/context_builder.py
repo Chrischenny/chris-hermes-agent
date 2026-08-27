@@ -23,6 +23,7 @@ class RuntimeStatus:
     emergency_threshold_tokens: int | None
     active_task_id: str | None
     active_segment_id: str | None
+    emergency_state: str = "not_triggered"
     policy_diagnostics: tuple[str, ...] = ()
 
 
@@ -71,6 +72,7 @@ def render_runtime_status(status: RuntimeStatus) -> str:
             f"{'true' if status.handoff_threshold_tokens is not None else 'false'}",
             f"Active task: {status.active_task_id or 'none'}",
             f"Context segment: {status.active_segment_id or 'none'}",
+            f"Emergency compression state: {status.emergency_state}",
         )
     )
 

@@ -1,7 +1,7 @@
 ---
 name: context-handoff
 description: Manage durable Hermes tasks and active Context Rotation.
-version: 0.2.0
+version: 0.3.0
 author: Chrischenny
 metadata:
   hermes:
@@ -61,9 +61,13 @@ tokens only as lagging calibration.
   Update durable state while approaching the boundary.
 - Never invoke default Compression as a normal Handoff substitute.
 
-The current runtime does not yet execute Emergency Fallback. A displayed emergency
-threshold is policy metadata, not evidence that compression occurred. Do not claim an
-Emergency action unless the runtime returns and records it.
+Emergency Fallback is a last resort and only exists when Runtime Status shows a matched,
+explicitly configured Emergency threshold. Never trigger it as an ordinary Handoff
+substitute or invent a threshold. When Runtime Status reports `completed`, treat the
+request as a temporary recovery Context: reconcile the active Task, persist a complete
+Checkpoint as soon as state is stable, and perform the normal explicit Handoff. When it
+reports `triggered` or `failed (...)`, do not retry compression, delete history, or claim
+success; preserve the durable state and resolve the reported failure safely.
 
 ## Create a Checkpoint and hand off
 
