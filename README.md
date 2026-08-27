@@ -3,10 +3,11 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-The repository is at the **P7 release-candidate boundary**. Isolated integration,
-real Hermes Host/install, restart, 10-rotation, and rollback tests are complete;
-the explicitly authorized `chris-avatar` rollout and observation window remain. The
-plugin persists profile-scoped Task State, exposes an atomic `handoff_context`
+P7 is deployed to `chris-avatar`, and its initial restart/log/database observation
+passed. Isolated integration, real Hermes Host/install, restart, 10-rotation, and
+rollback tests are also complete. The first Handoff/Emergency under a real developer
+workload remains under normal operational observation. The plugin persists
+profile-scoped Task State, exposes an atomic `handoff_context`
 tool, and ships the Agent workflow that classifies task boundaries, creates
 quality-checked Checkpoints, and selects an isolated Context without ending the
 current Agent Turn. A model policy may now explicitly enable a last-resort,
@@ -26,7 +27,7 @@ Checkpoint guidance includes all runtime-required fields, a semantic quality
 self-check, Checksum/result validation, and the exact Handoff preflight. The
 companion [`SOUL-snippet.md`](./soul/SOUL-snippet.md) references only the
 current Runtime Policy and contains no fixed model, Token, or ratio threshold.
-It remains a migration artifact until the authorized `chris-avatar` rollout.
+It is also the source of the rules now migrated into `chris-avatar`.
 
 ## Context rotation
 
@@ -116,15 +117,18 @@ busy Session requires a valid Checkpoint and pauses the unfinished task by
 default. Task search covers state, selected decision events, Checkpoints,
 artifacts, aliases, tags, and Next Actions without indexing bulk Tool Trace.
 
-Runtime data is created lazily through Hermes `plugin_db()` at:
+Runtime data is created lazily under the active Hermes Profile at:
 
 ```text
 <HERMES_HOME>/plugin-data/chris-hermes-agent/data.db
 <HERMES_HOME>/plugin-data/chris-hermes-agent/archives/<random>.json
 ```
 
-SQLite runs with WAL, foreign keys, a busy timeout, versioned migrations, and
-optimistic locks on Task and Session state. Resume updates durable state and
+The data directory/database are restricted to `0700/0600`, and unsafe symlink,
+non-regular-file, or multi-hardlink targets are rejected. SQLite uses WAL on fixed
+versions and DELETE journal on versions affected by the WAL-reset corruption bug;
+foreign keys, a busy timeout, versioned migrations, and optimistic locks protect Task
+and Session state. Resume updates durable state and
 returns `context_rotation_applied: false`, `context_rotation_required: true`,
 and `next_required_action: call_handoff_context`; the explicit Handoff call
 then performs the request-level Context switch.

@@ -2,9 +2,9 @@
 
 > 交接时间：2026-08-27
 >
-> 交接边界：P7 隔离发布候选已完成，Profile 上线待授权
+> 交接边界：P7 已部署到 `chris-avatar`，初始运行观察通过
 >
-> 下一阶段：确认 Policy、执行受控 Profile 上线与观察
+> 下一阶段：使用真实小型开发任务持续观察首次 Handoff/Emergency 证据
 
 ## 1. Task
 
@@ -18,6 +18,8 @@
 - P4 实现提交：`5b9d06f feat: add atomic context rotation`
 - P5 实现提交：`bd71a47 feat: add task isolation handoff workflow`
 - P6 实现提交：`d2a9046 feat: add emergency context fallback`
+- P7 上线安全修复：`2927a05 fix: avoid vulnerable SQLite WAL mode`
+- P7 状态权限修复：`5adc9dc fix: restrict plugin state permissions`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -45,8 +47,8 @@
 5. 不允许在代码或 SOUL 中硬编码跨模型通用甜区。
 6. 普通 Handoff 时机由用户配置和 Agent 当前任务状态共同决定。
 7. 没有匹配当前模型的 Policy 时，只报告 Context 使用事实，不猜测阈值。
-8. 未获得用户明确上线授权前，不得修改、安装或重启正在运行的
-   `chris-avatar`。
+8. `chris-avatar` 上线变更必须获得用户明确授权；本次 P7 已于 2026-08-27
+   获得授权并完成。
 
 ## 4. Architecture Decisions
 
@@ -99,8 +101,10 @@ Task Tools 和 bundled Skill；拆成两个插件会增加版本、安装和数�
 ```
 
 模型模式沿用 Hermes 的最长子串语义；等长模式同时命中时视为歧义并 fail
-closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-5.6-sol` 的真实
-甜区和 Emergency 阈值将在上线前由用户配置，不阻塞后续开发。
+closed。示例阈值只属于文档示例，不能成为代码默认值。用户已为
+`gpt-5.6-sol` 确认并部署 ratio Policy：Handoff `0.70`、Emergency 启用且为
+`0.85`。按当前缓存的 272,000 Context Limit，运行时解析阈值分别为 190,400 和
+231,200 Token。
 
 ### 4.4 Task 暂存、搜索和恢复
 
@@ -207,9 +211,9 @@ P1 已完成：
 P2 已完成：
 
 - 将版本更新到 `0.2.0`；
-- 使用 Hermes `plugins.plugin_storage.plugin_db()` 在首次 Task Tool 调用时惰性
-  创建当前 Profile 数据库；
-- 建立 Schema v1、版本检查、WAL、外键、busy timeout 和幂等迁移；
+- P2 最初使用 Hermes `plugins.plugin_storage.plugin_db()` 惰性创建数据库；P7
+  安全加固后改为通过 `plugin_data_dir()` 定位并安全创建 Profile 数据库；
+- 建立 Schema v1、版本检查、安全 journal mode、外键、busy timeout 和幂等迁移；
 - 实现 Task、Event、Checkpoint、Context Segment 和 Session Context State；
 - 实现事务回滚、Task/Session 乐观锁和并发更新保护；
 - 实现 Checkpoint 完整字段、非空 Next Actions、SHA-256 Checksum 和损坏拒绝；
@@ -285,7 +289,7 @@ P6 已完成：
 
 ## 6. Current State
 
-P7 隔离发布候选已完成，`chris-avatar` Profile 上线仍未执行：
+P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
 - `threshold_tokens` 只反映已匹配且显式启用的 Emergency 阈值；
@@ -325,11 +329,27 @@ P7 隔离发布候选已完成，`chris-avatar` Profile 上线仍未执行：
 - 独立新任务不继承旧任务结构化状态，Rotation 后也不包含旧 User History 或
   Tool Trace；
 - 低置信度分类和多个相近 Resume 候选会在改变状态前要求用户确认；
-- `soul/SOUL-snippet.md` 已准备好但尚未合并到 `chris-avatar/SOUL.md`；
+- `soul/SOUL-snippet.md` 的规则已合并到 `chris-avatar/SOUL.md`，原有固定模型阈值
+  和强制重开会话规则已移除；
 - 普通路径不会调用 Hermes 默认 Compression；显式 Emergency 路径委托给 Hermes
   原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
-- 未安装到 `chris-avatar`。
+- 已从不可变 Commit `5adc9dc03fcb09957a6fefca32f74fcd2a7ba27d` 安装到
+  `chris-avatar`，插件版本为 `0.7.0`；
+- 插件已启用且未授予 built-in tool override 权限，`context.engine` 已切换为
+  `context-handoff`；
+- Profile Policy 为 ratio Handoff `0.70`、Emergency `0.85`；实际运行时解析到
+  272,000 Context Limit、190,400 Handoff 阈值和 231,200 Emergency 阈值；
+- 上线前快照保存在
+  `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`，Checksum 和
+  SQLite 完整性校验均通过；
+- `hermes-gateway-chris-avatar.service` 已重启并保持 active/running；启动日志确认
+  `context-handoff` 注册成功，未出现插件 traceback/error/failed；
+- 插件数据库目录权限为 `0700`、文件权限为 `0600`，完整性校验通过；当前 Hermes
+  Python 链接 SQLite 3.50.4，因此插件安全使用 `journal_mode=DELETE`，不进入已知
+  WAL-reset 损坏路径；
+- 初始线上数据库尚无 Task/Event/Segment，这符合尚未运行真实开发任务的状态；
+  首次真实 Handoff/Emergency 的交叉追溯证据由后续实际工作负载观察补充。
 - 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
 - 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
   no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
@@ -390,10 +410,10 @@ P7 隔离发布候选已完成，`chris-avatar` Profile 上线仍未执行：
 
 ## 7. Verification Evidence
 
-P7 隔离发布候选验证结果：
+P7 最终验证与上线结果：
 
-- 116 个单元/契约/集成/E2E 测试全部通过；
-- 总覆盖率 86.94%，超过 80% 门槛；
+- 123 个单元/契约/集成/E2E 测试全部通过；
+- 总覆盖率 86.91%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -401,6 +421,11 @@ P7 隔离发布候选验证结果：
 - Plugin Doctor 在临时 `HERMES_HOME` 中运行，没有触碰 `chris-avatar`。
 - 标准插件安装、启用、配置和 installed-path Runtime 选择在临时 Profile 通过；
 - 备份和一条命令回滚在临时 Profile 通过；
+- 真机安装固定 SHA、Policy 解析、SOUL 迁移、配置检查、installed-path Doctor、
+  Gateway 重启、日志扫描及 SQLite 完整性/权限检查均通过；
+- 安全预检发现 Hermes Python 的 SQLite 3.50.4 处于已知 WAL-reset 风险范围；插件
+  已增加版本边界检测并在该版本使用 DELETE journal。另将插件数据目录/数据库
+  权限收紧为 `0700/0600`，并拒绝符号链接、非常规文件和多硬链接数据库；
 - Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
   因仓库当前没有授权文件，本阶段不代替用户指定许可证；
 - `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
@@ -425,7 +450,8 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
 
 ## 8. Known Issues / Expected Limitations
 
-- Policy 数值尚未写入 `chris-avatar`，这是上线前的用户配置项；
+- `gpt-5.6-sol` 的 ratio Policy 已写入 `chris-avatar`；后续更改比例或切换模型时
+  仍必须显式配置并重新验证解析结果；
 - 当前 Request Token 是 Hermes 的消息级粗估值；Tool Schema Token 不在
   `select_context()` 的参数中，因此不包含在此字段内；
 - 上一 Response 真实 Usage 会滞后一轮，这是设计中的校准数据；
@@ -439,8 +465,10 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
   Selection；Agent 仍需尽快补建正式 Checkpoint 并执行普通 Handoff；
 - `select_context()` 的消息估算不含 Tool Schema Token；Hermes Host 传给
   `should_compress()` 的 Request Pressure 才是 Emergency 触发的权威输入；
-- `chris-avatar` 仍使用 Hermes 默认 ContextEngine；
-- `chris-avatar/SOUL.md` 尚未迁移。
+- Hermes v0.20.5 自带 Python 当前链接 SQLite 3.50.4；插件已安全回退 DELETE
+  journal，但后续可在独立维护窗口升级 Hermes/SQLite；
+- 真机尚未产生首次 Task/Handoff/Emergency 事件；这不是启动故障，真实开发任务
+  观察期间应保留数据库、归档和对应时间戳，异常时不要先清理证据。
 
 ## 9. Rejected Alternatives
 
@@ -465,17 +493,16 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-严格按以下顺序完成剩余 P7：
+P7 部署与初始观察已完成，接下来按真实工作负载持续验证：
 
-1. 获取用户对 `gpt-5.6-sol` Handoff 类型/数值、Emergency 开关/阈值的确认；
-2. 提交并推送 0.7.0 发布候选，记录用于安装的不可变 40 位 Commit SHA；
-3. 再次向用户取得修改 `chris-avatar` 和重启 Gateway 的明确上线授权；
-4. 按 `docs/P7-chris-avatar-runbook.md` 记录预检并执行受保护备份；
-5. 安装固定 SHA、写入确认后的 Policy、迁移 SOUL、启用插件并通过配置检查；
-6. 重启 Gateway，用隔离 Session 观察日志、Token、Event、Segment 和 Archive；
-7. 完成验收或运行一条命令回滚；无论哪条路径都保留插件 SQLite 和 Emergency
-   诊断归档；
-8. 记录真实上线证据，将 P7 标记为最终完成并推送交接文档。
+1. 用户直接运行一条范围较小的真实开发任务，无需人工制造超长 Context；
+2. 首次接近 Handoff 甜区时，核对 Runtime Status、Task、Checkpoint、Event 和
+   Segment 是否可交叉追溯；
+3. 若实际触发 Emergency，保留 Archive、数据库和日志，成功后尽快补建正式
+   Checkpoint/Handoff；
+4. 若出现异常，记录时间戳、Session ID 和 Runtime Status，不删除诊断证据；再按
+   `docs/P7-chris-avatar-runbook.md` 定位或使用受保护快照回滚；
+5. 在独立维护窗口评估升级 Hermes，使其 Python SQLite 离开已知风险版本范围。
 
 ## 11. P7 Acceptance Criteria
 

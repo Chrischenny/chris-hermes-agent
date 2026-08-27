@@ -4,7 +4,7 @@
 >
 > 目标 Profile：`chris-avatar`
 >
-> 文档状态：P7 隔离集成与回滚准备已完成，等待 Profile 上线授权
+> 文档状态：P7 已部署，初始观察通过，进入真实工作负载持续观察
 
 ## 1. 已确认决策
 
@@ -163,7 +163,10 @@ chris-hermes-agent/
     └── rollback-profile.sh
 ```
 
-运行数据不得写入插件安装目录。SQLite 使用 Hermes 提供的 `plugin_db()`，实际数据位于当前 Profile 的 `plugin-data/<plugin-name>/data.db`。
+运行数据不得写入插件安装目录。插件使用 Hermes 的 `plugin_data_dir()` 定位当前
+Profile 的 `plugin-data/<plugin-name>/data.db`，并自行以 `0700/0600` 安全权限创建
+目录和数据库，拒绝符号链接、非常规文件和多硬链接数据库。SQLite 版本安全时使用
+WAL；命中已知 WAL-reset 损坏版本时自动使用 DELETE journal。
 
 ## 6. 模型级 Handoff Policy
 
@@ -199,11 +202,11 @@ plugins:
               handoff_enabled: true
               sweet_zone:
                 type: ratio
-                start: 0.55       # 示例值，上线前由用户确认
+                start: 0.70       # chris-avatar 已部署值
               emergency:
                 enabled: true
                 type: ratio
-                threshold: 0.90   # 示例值，上线前由用户确认
+                threshold: 0.85   # chris-avatar 已部署值
 
             glm-5.3:
               handoff_enabled: true
@@ -216,7 +219,8 @@ plugins:
                 threshold: 700000 # 示例值，上线前由用户确认
 ```
 
-示例值不能作为代码默认值。安装程序生成配置模板，但在用户确认前不启用模型策略。
+其他模型的示例值不能作为代码默认值。上述 `gpt-5.6-sol` 数值是用户为
+`chris-avatar` 明确确认的 Profile 配置，也不是插件默认值。
 
 ### 6.3 策略匹配顺序
 
@@ -552,7 +556,7 @@ Skill 负责：
 | P4 Context Rotation | 已完成 | 已实现原子 Segment 切换、Checkpoint Bootstrap 和同 Turn 继续 |
 | P5 Skill、SOUL 与任务隔离 | 已完成 | 已交付 Agent 工作流、SOUL 片段和任务隔离验证 |
 | P6 Emergency Fallback | 已完成 | 已实现安全归档、Hermes Delegate、验证和恢复 |
-| P7 集成测试与上线 | 进行中 | 隔离验收和回滚路径已完成，等待用户确认 Policy 与上线授权 |
+| P7 集成测试与上线 | 已完成 | 已安装固定 SHA、应用 Policy/SOUL、重启 Gateway 并通过初始观察 |
 
 ### P0：工程骨架与契约测试
 
@@ -600,9 +604,9 @@ Policy Resolver 支持 ratio、absolute_tokens、精确模型、最长模型子�
 追溯；P2 只切换 Task Active Pointer，实际 Provider Context Rotation 仍在 P4
 接通。
 
-完成证据：使用 Hermes `plugins.plugin_storage.plugin_db()` 惰性创建 Profile
+完成证据：在 Hermes Profile 的 `plugin-data/chris-hermes-agent/` 中惰性创建
 数据库；Schema v1 包含 Task、Event、Checkpoint、Segment 和 Session Context
-State，启用 WAL、外键、busy timeout、事务和乐观锁；Task Tool 已支持创建、
+State，启用安全的 journal mode、外键、busy timeout、事务和乐观锁；Task Tool 已支持创建、
 查询、更新、暂存、检索、恢复、阻塞、完成和取消。FTS5 trigram 支持中文子串
 检索并带字符串回退，搜索文档包含 Task State、Checkpoint 和选择性 Decision
 Event，不包含大段 Tool Trace。62 个测试通过，总覆盖率 87.24%，并发、回滚、
@@ -691,7 +695,7 @@ Doctor 均通过。
 
 ### P7：集成测试与 Profile 上线
 
-状态：**进行中（隔离发布候选已完成，Profile 上线待授权）**
+状态：**已完成（2026-08-27，部署与初始观察通过）**
 
 - 完成长 Tool Loop 集成测试；
 - 测试 Gateway 重启；
@@ -702,7 +706,7 @@ Doctor 均通过。
 
 完成标准：所有验收标准通过，并具备一键回滚路径。
 
-当前证据：116 个测试通过，总覆盖率 86.94%。真实 Hermes Host 测试覆盖 Tool
+完成证据：123 个测试通过，总覆盖率 86.91%。真实 Hermes Host 测试覆盖 Tool
 Schema Request Pressure、Compression no-progress 边界、Emergency 后正式
 Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安装测试通过
 标准 `plugins install`、installed-path Doctor、配置注入、ContextEngine 选择及
@@ -710,7 +714,19 @@ Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安�
 中途重建 Engine。备份/回滚脚本通过隔离 E2E，可校验快照后恢复原 config、SOUL
 和 Session 数据库，同时保留插件 SQLite 与 Emergency 归档。当前 Hermes 安装器
 只接受 Manifest v1，因此发布包显式锁定 `manifest_version: 1`；加载器所需的
-`api_version` 和 `config_schema` 仍保留。尚未修改、安装或重启 `chris-avatar`。
+`api_version` 和 `config_schema` 仍保留。
+
+用户确认 `gpt-5.6-sol` 使用 ratio Handoff `0.70`、Emergency `0.85`。插件已从
+不可变 Commit `5adc9dc03fcb09957a6fefca32f74fcd2a7ba27d` 安装并启用，SOUL 规则已迁移，
+`context.engine` 已切换为 `context-handoff`。按 272,000 Context Limit，运行时解析
+阈值为 190,400/231,200 Token。上线前快照位于
+`/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`，Checksum 与
+SQLite 完整性通过；Gateway 重启后保持 active/running，启动日志无插件错误。
+
+安全预检另发现当前 Hermes Python 链接 SQLite 3.50.4。最终实现会识别 SQLite
+WAL-reset 风险版本并在此环境使用 DELETE journal，同时将插件数据目录和数据库
+权限收紧为 `0700/0600`。初始线上库尚无 Task/Event/Segment，符合尚未运行真实
+开发任务的状态；首次真实 Handoff/Emergency 证据转入正常使用过程持续观察。
 
 ## 15. 测试计划
 
@@ -792,7 +808,8 @@ Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安�
 8. 合并 SOUL Handoff 规则，删除固定模型阈值和强制重开会话规则；
 9. 运行单元测试和离线集成测试；
 10. 重启 `hermes-gateway-chris-avatar.service`；
-11. 使用隔离 Session 运行长 Tool Loop；
+11. 初始观察通过后，使用真实小型开发任务持续观察 Runtime Status 和首次
+    Handoff；
 12. 检查 Gateway 日志、Token Usage、Event Log 和 SQLite 状态；
 13. 验收后开放正式任务。
 
@@ -825,11 +842,12 @@ Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安�
 
 完整版本预计 `11～13 个工作日`。
 
-## 20. 开发前最后配置项
+## 20. 已确认的上线配置
 
-代码开发可以立即开始。上线到 `chris-avatar` 前，只需要用户为当前模型确认：
+用户已确认并部署：
 
-- `gpt-5.6-sol` 的甜区类型和数值；
-- `gpt-5.6-sol` 的 Emergency Fallback 是否启用及阈值。
+- `gpt-5.6-sol` 甜区使用 ratio `0.70`；
+- Emergency Fallback 启用，使用 ratio `0.85`。
 
-这些数值属于 Profile 配置，不阻塞插件功能开发，也不会进入代码默认值。
+这些数值只属于 `chris-avatar` Profile 配置，没有进入代码或 SOUL 默认值。后续
+模型切换或比例调整仍需显式配置并验证运行时解析结果。

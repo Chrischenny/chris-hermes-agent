@@ -1,5 +1,22 @@
 # P7 `chris-avatar` rollout and rollback
 
+## Deployment record — 2026-08-27
+
+- User-approved Policy: `gpt-5.6-sol` ratio Handoff `0.70`, Emergency enabled at
+  `0.85`.
+- Runtime Context Limit: 272,000; resolved thresholds: 190,400 and 231,200 Token.
+- Installed immutable Commit:
+  `5adc9dc03fcb09957a6fefca32f74fcd2a7ba27d` (plugin `0.7.0`).
+- Protected pre-rollout backup:
+  `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`.
+- `context.engine=context-handoff`; SOUL migration and installed-path Doctor passed.
+- `hermes-gateway-chris-avatar.service` restarted and remained active/running; initial
+  logs and plugin database checks showed no plugin failure.
+- Current Hermes Python links SQLite 3.50.4, so the plugin intentionally selected
+  `journal_mode=DELETE`; plugin data directory/database permissions are `0700/0600`.
+- No Task/Handoff/Emergency has yet been created by a real workload. Retain the backup,
+  plugin database, archives, logs, timestamp, and Session ID if an issue appears.
+
 This runbook is the live boundary for P7. The isolated test suite may run at any time, but
 do not execute the backup, install, Profile mutation, Gateway restart, or rollback commands
 against `chris-avatar` until the user has confirmed both policy values and explicitly
