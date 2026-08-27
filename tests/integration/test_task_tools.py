@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import stat
 from pathlib import Path
 
+import pytest
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
 from chris_hermes_agent.migrations import initialize_database
 from chris_hermes_agent.store import TaskRepository
-from chris_hermes_agent.task_tools import TaskToolHandlers
+from chris_hermes_agent.task_tools import TaskToolHandlers, _default_repository
 
 
 def _handlers(path: Path) -> TaskToolHandlers:
@@ -223,4 +225,28 @@ def test_default_runtime_uses_profile_scoped_hermes_plugin_database(
         reset_hermes_home_override(token)
 
     assert created["ok"] is True
-    assert (hermes_home / "plugin-data" / "chris-hermes-agent" / "data.db").is_file()
+    data_directory = hermes_home / "plugin-data" / "chris-hermes-agent"
+    database_path = data_directory / "data.db"
+    assert database_path.is_file()
+    assert stat.S_IMODE(data_directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE(database_path.stat().st_mode) == 0o600
+
+
+def test_default_repository_rejects_symlinked_plugin_state_directory(
+    tmp_path: Path,
+) -> None:
+    hermes_home = tmp_path / "profile"
+    plugin_data = hermes_home / "plugin-data"
+    plugin_data.mkdir(parents=True)
+    target = tmp_path / "unexpected-target"
+    target.mkdir()
+    (plugin_data / "chris-hermes-agent").symlink_to(
+        target,
+        target_is_directory=True,
+    )
+    token = set_hermes_home_override(str(hermes_home))
+    try:
+        with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+            _default_repository()
+    finally:
+        reset_hermes_home_override(token)

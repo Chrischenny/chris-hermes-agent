@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -113,10 +115,36 @@ def _error(code: str, message: str) -> str:
 
 
 def _default_repository() -> TaskRepository:
-    from plugins.plugin_storage import plugin_db  # type: ignore[import-not-found]
+    from plugins.plugin_storage import (  # type: ignore[import-not-found]
+        plugin_data_dir,
+    )
 
-    connection = plugin_db("chris-hermes-agent")
-    initialize_database(connection)
+    directory = plugin_data_dir("chris-hermes-agent")
+    if directory.is_symlink():
+        raise RuntimeError("Plugin data directory must not be a symbolic link.")
+    os.chmod(directory, 0o700)
+    database_path = directory / "data.db"
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(database_path, flags | os.O_EXCL, 0o600)
+    except FileExistsError:
+        descriptor = os.open(database_path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise RuntimeError(
+                "Plugin database must be a regular file without hard links."
+            )
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
+
+    connection = sqlite3.connect(database_path, check_same_thread=False)
+    try:
+        initialize_database(connection)
+    except Exception:
+        connection.close()
+        raise
     return TaskRepository(connection)
 
 
