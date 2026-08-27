@@ -17,7 +17,7 @@
 - P3 实现提交：`bfb862e feat: add runtime context status observation`
 - P4 实现提交：`5b9d06f feat: add atomic context rotation`
 - P5 实现提交：`bd71a47 feat: add task isolation handoff workflow`
-- P6 实现提交：待本次实现提交后回填
+- P6 实现提交：`d2a9046 feat: add emergency context fallback`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
