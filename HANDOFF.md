@@ -1,10 +1,10 @@
 # Hermes Context Handoff 开发交接
 
-> 交接时间：2026-08-26
+> 交接时间：2026-08-27
 >
-> 交接边界：P3 已完成，P4 尚未开始
+> 交接边界：P4 已完成，P5 尚未开始
 >
-> 下一阶段：P4 Context Rotation
+> 下一阶段：P5 Skill、SOUL 与任务隔离
 
 ## 1. Task
 
@@ -15,6 +15,7 @@
 - P1 实现提交：`a3993fe feat: add model handoff policy resolver`
 - P2 实现提交：`1b30c38 feat: persist task lifecycle and resume state`
 - P3 实现提交：`bfb862e feat: add runtime context status observation`
+- P4 实现提交：`5b9d06f feat: add atomic context rotation`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -108,8 +109,10 @@ closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-
   Tool Trace；
 - 优先使用 FTS5 trigram 支持中文子串，运行环境不支持时回退到规范化字符串
   匹配；
-- P2 Resume 只更新持久化 Active Pointer，并明确返回
-  `context_rotation_applied: false`；真正的 Provider Context Rotation 在 P4。
+- Resume 先更新持久化 Active Pointer，并明确返回
+  `context_rotation_applied: false`、`context_rotation_required: true` 和
+  `next_required_action: call_handoff_context`；随后由显式 Handoff 调用完成
+  Provider Request Context Rotation。
 
 ### 4.5 Runtime Status 与 Token 观测
 
@@ -122,6 +125,18 @@ closed。示例阈值只属于文档示例，不能成为代码默认值。`gpt-
 - ContextEngine 和 Task Tools 共享同一个 Profile Repository，并在每次 Request
   查询当前 Session 的 Active Task/Segment Pointer；
 - 模型切换会清除旧模型 Usage，并立即展示新模型 Policy 和 Context Limit。
+
+### 4.6 Context Rotation 边界
+
+- Hermes 在执行 ContextEngine Tool Handler 前已经把当前 assistant Tool Call
+  写入 canonical messages，Tool Result 会在 Handler 返回后追加；因此新 Segment
+  的 `start_message_index` 指向该 assistant 消息；
+- `select_context()` 保留 Hermes 已组装的稳定 Prefix，只在本次 Provider Request
+  中加入 Checkpoint Bootstrap 和新 Segment Tail，不修改 Session History；
+- Handler 只接受消息尾部当前 assistant 中的 `handoff_context`，不得向前扫描并
+  误用历史 Tool Call；
+- P4 只旋转当前 Active Task；新任务、子任务分类与继承规则属于 P5；
+- 普通 Compression 继续关闭，Emergency Delegate 属于 P6。
 
 ## 5. Completed
 
@@ -183,16 +198,36 @@ P3 已完成：
 - 保持普通 Compression 和 Provider Context Rotation 安全关闭；
 - 更新版本、README 和开发计划并提交 P3。
 
+P4 已完成：
+
+- 将版本更新到 `0.4.0`；
+- 新增 `HandoffService`，校验 Checkpoint 所属关系、Checksum、目标 Task 状态和
+  Expected Active Task/Segment；
+- 在单个 `BEGIN IMMEDIATE` 事务中关闭旧 Segment、创建新 Segment、CAS 更新
+  Session Pointer 并追加 `HANDOFF_COMPLETED`；
+- 启用 ContextEngine 的 `handoff_context` Handler，并只接受当前消息尾部的
+  assistant Tool Call；
+- 新增完整 Checkpoint Bootstrap，保留稳定 Prefix、Handoff Tool Call/Result 和
+  Handoff 后消息，同时排除旧 Segment Tool Trace；
+- Context 选择保持 request-only，不删除或改写 Hermes Session History；
+- Checkpoint/游标损坏时返回隔离的诊断 Bootstrap，不重新引入旧 Trace；
+- 覆盖事务回滚、真实双连接并发、重复调用、同 Turn Tool Loop、进程重启和
+  Tool Pairing；
+- 更新版本、README、bundled Skill 状态和开发计划并提交 P4。
+
 ## 6. Current State
 
-P3 已启用 Runtime 观测，Context Rotation 执行面仍处于安全关闭状态：
+P4 已启用原子 Context Rotation，P5 Agent 工作流尚未实现：
 
 - `ContextHandoffEngine` 持有当前 `policy_resolution`；
 - `threshold_tokens` 只反映已匹配且有效的普通 Handoff 起点；
 - 无配置或无效配置时 `observation_only=True` 且阈值清零；
 - `ContextHandoffEngine.should_compress()` 恒为 `False`；
 - `compress()` 严格原样返回输入消息列表；
-- `select_context()` 每次返回带有一条最新 Runtime Status 的新 Request 列表；
+- 初始 Segment 仍使用完整 conversation；带 Checkpoint 的 Active Segment 会使用
+  Checkpoint Bootstrap 和 `start_message_index` 之后的新 Tail；
+- `select_context()` 每次返回新的 Request 列表，并在尾部加入一条最新 Runtime
+  Status；
 - 原消息列表、System Prompt、稳定 Prefix 和 Hermes Session History 不被修改；
 - Runtime Status 包含模型、Context Limit、估算/真实 Token、Policy 来源与阈值、
   Active Task 和 Segment；
@@ -202,10 +237,14 @@ P3 已启用 Runtime 观测，Context Rotation 执行面仍处于安全关闭状
 - Repository 在首次 Task Tool 调用或绑定 Session 后的首次 Runtime Status 读取时
   惰性创建，路径为当前 Profile 的
   `plugin-data/chris-hermes-agent/data.db`；
-- Resume 会更新持久化 Task/Segment/Session Pointer，但明确报告 Provider
-  Context 尚未 Rotation；
-- `handoff_context` 返回结构化 `phase_not_ready`；
-- 不会切换 Provider Context；
+- Resume 会更新持久化 Task/Segment/Session Pointer，并明确要求下一步调用
+  `handoff_context`；
+- `handoff_context` 已可用，成功结果包含新 Segment、Checkpoint、Task、Next
+  Actions 和 `handoff_applied: true`；
+- 当前 Handoff 只允许目标 Task 等于当前 Active Task，P5 再编排新任务/子任务；
+- `skills/context-handoff/SKILL.md` 目前只是准确的 P4 状态 Stub，完整操作流程在
+  P5 编写；
+- 不会调用 Hermes 默认 Compression；
 - 不会修改 Hermes Session；
 - 未安装到 `chris-avatar`。
 
@@ -216,6 +255,7 @@ P3 已启用 Runtime 观测，Context Rotation 执行面仍处于安全关闭状
 - `chris_hermes_agent/plugin.py`
 - `chris_hermes_agent/context_engine.py`
 - `chris_hermes_agent/context_builder.py`
+- `chris_hermes_agent/handoff_service.py`
 - `chris_hermes_agent/token_usage.py`
 - `chris_hermes_agent/models.py`
 - `chris_hermes_agent/errors.py`
@@ -230,20 +270,23 @@ P3 已启用 Runtime 观测，Context Rotation 执行面仍处于安全关闭状
 - `tests/contract/`
 - `tests/unit/test_policy.py`
 - `tests/unit/test_context_builder.py`
+- `tests/unit/test_handoff_bootstrap.py`
+- `tests/unit/test_handoff_service.py`
 - `tests/unit/test_token_usage.py`
 - `tests/unit/test_store.py`
 - `tests/unit/test_task_service.py`
 - `tests/integration/test_task_tools.py`
 - `tests/integration/test_runtime_status.py`
+- `tests/integration/test_context_rotation.py`
 - `tests/integration/test_plugin_doctor.py`
 - `pyproject.toml`
 
 ## 7. Verification Evidence
 
-P3 最终验证结果：
+P4 最终验证结果：
 
-- 74 个单元/契约/集成测试全部通过；
-- 总覆盖率 87.66%，超过 80% 门槛；
+- 90 个单元/契约/集成测试全部通过；
+- 总覆盖率 86.32%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -266,14 +309,15 @@ HERMES_HOME="$hermes_temp_dir" hermes plugins doctor . --ci
 
 ## 8. Known Issues / Expected Limitations
 
-- Handoff Tool 目前有意不可用，不是缺陷；
 - Policy 数值尚未写入 `chris-avatar`，这是上线前的用户配置项；
 - 当前 Request Token 是 Hermes 的消息级粗估值；Tool Schema Token 不在
   `select_context()` 的参数中，因此不包含在此字段内；
 - 上一 Response 真实 Usage 会滞后一轮，这是设计中的校准数据；
-- Task Resume 尚未连接 Provider Context Rotation；
+- Resume Tool 不直接执行 Rotation；它返回明确的下一步，Agent 必须再调用
+  `handoff_context`；
 - 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
-- Context Rotation 尚未实现；
+- 完整 Handoff Skill、SOUL 规则、新任务/子任务分类和继承策略尚未实现，属于
+  P5；
 - Emergency Fallback 尚未实现；
 - `chris-avatar` 仍使用 Hermes 默认 ContextEngine；
 - `chris-avatar/SOUL.md` 尚未迁移。
@@ -301,40 +345,39 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 ## 10. Next Actions
 
-新会话从 P4 开始，建议严格按以下顺序：
+新会话从 P5 开始，建议严格按以下顺序：
 
-1. 阅读本交接文件和开发计划 P4；
+1. 阅读本交接文件和开发计划 P5；
 2. 检查 `git status`，确认 `main` 与 `origin/main` 同步；
-3. 使用 `documentation-lookup` 再核对 Hermes 当前 Request 消息游标、Tool
-   Call/Result Sanitizer 和 ContextEngine Tool Handler 的运行时 kwargs；
-4. 使用 `tdd-workflow`，先编写 Handoff 状态机和 Context Bootstrap 失败测试；
-5. 实现 `handoff_context` 的参数、Checkpoint 所属关系/Checksum 和 Expected
-   Active Pointer 校验；
-6. 在单个 SQLite 事务中关闭旧 Segment、创建新 Segment、更新 Pointer 并记录
-   `HANDOFF_COMPLETED`；
-7. 让下一次 `select_context()` 检测 Segment 变化，并用 Checkpoint 构造新的
-   Active Context；
-8. 保留 Hermes System/Prefill 稳定头、触发 Handoff 的 assistant tool call 与
-   对应 tool result，以及 Handoff 后新增消息；
-9. 排除旧 Segment 的大量 Tool Trace，同时保留完整 Hermes Session History；
-10. 测试同一 Agent Turn 连续执行、并发/重复 Handoff、Provider Retry、进程重启、
-    Checkpoint 损坏和 Tool Pairing；
-11. 运行完整 P0/P1/P2/P3 回归、覆盖率、类型检查、构建和 Plugin Doctor；
-12. 更新计划进度，提交并推送 P4。
+3. 使用 `skill-creator` 完整重写 bundled `context-handoff` Skill，并读取该技能的
+   全部创建规范；
+4. 使用 `tdd-workflow` 先定义当前任务延续、子任务、完全新任务和低置信度确认的
+   场景测试；
+5. 明确 Task/Checkpoint/Decision/Artifact 的继承白名单，禁止复制父任务 Tool
+   Trace；
+6. 编写 Checkpoint 质量自检、Handoff 前置检查和 Handoff 后从 Next Actions
+   恢复的操作流程；
+7. 编写 `soul/SOUL-snippet.md`，只引用当前模型 Runtime Policy，不写固定 Token
+   或固定比例；
+8. 覆盖新任务先 Checkpoint/暂停旧 Task、创建或恢复目标 Task、再显式调用
+   `handoff_context` 的完整 Tool Loop；
+9. 保持分类语义在 Skill/Task 层，ContextEngine 不负责理解用户目标；
+10. 测试新任务隔离、子任务父子关系、多个相近恢复候选、低置信度确认和连续
+    Rotation；
+11. 运行完整 P0～P4 回归、覆盖率、类型检查、构建和隔离 Plugin Doctor；
+12. 更新版本、README、计划与本交接文档，提交并推送 P5。
 
-## 11. P4 Acceptance Criteria
+## 11. P5 Acceptance Criteria
 
-- `handoff_context` 只接受属于目标 Task 的完整、Checksum 有效 Checkpoint；
-- Expected Active Task/Segment 不一致时 fail closed，不产生部分状态；
-- Segment 关闭、新 Segment、Pointer 和 Event 在一个事务中原子提交；
-- 成功结果包含新 Segment、Checkpoint、Task、Next Actions 和
-  `handoff_applied: true`；
-- 下一次 Provider Request 使用新 Context，且无需等待下一条用户消息；
-- 新 Context 保留 System/SOUL/Skills/Memory 等 Hermes 稳定头；
-- 触发 Handoff 的 Tool Call/Result 保持成对，不产生孤立 Tool Message；
-- 旧 Segment 大量 Tool Trace 不进入新 Request，但原始 Session History 不删除；
-- Runtime Status 继续只存在于 Request 尾部，并显示新的 Active Segment；
-- 并发或重复 Handoff 不得产生双 Segment 或重复 Event；
-- `should_compress()` 继续恒为 `False`，普通路径不触发默认 Compression；
-- P0/P1/P2/P3 全部测试继续通过；
-- 不修改或重启 `chris-avatar`。
+- bundled Skill 给出可执行且自洽的 Task/Checkpoint/Handoff 工作流；
+- 当前任务延续不会无故创建新 Task 或 Rotation；
+- 子任务记录正确的 `parent_task_id`，只继承显式允许的结构化状态；
+- 完全新任务先保存并暂停未完成旧 Task，再创建新 Task 和隔离 Context；
+- 分类置信度不足且结果会改变持久化状态时，必须向用户确认；
+- Resume 与新任务流程都会在持久化状态就绪后显式调用 `handoff_context`；
+- Checkpoint 必须包含继续目标所需字段、有效 Checksum 和非空 Next Actions；
+- 新 Context 不继承旧任务 Tool Trace；
+- SOUL 规则不包含固定模型阈值，只读取 Runtime Status 中的当前 Policy；
+- ContextEngine 继续只负责观测与执行，不承担 Task 语义分类；
+- P0～P4 全部测试继续通过；
+- 不修改、安装或重启 `chris-avatar`。
