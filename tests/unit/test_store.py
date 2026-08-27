@@ -79,7 +79,9 @@ def _checkpoint(task_id: str = "task-1") -> CheckpointRecord:
 
 def test_migration_is_idempotent_and_enables_required_sqlite_contract(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 51, 3))
     database_path = tmp_path / "data.db"
     connection = sqlite3.connect(database_path, check_same_thread=False)
 
@@ -106,6 +108,33 @@ def test_migration_is_idempotent_and_enables_required_sqlite_contract(
         "context_segments",
         "session_context_state",
     } <= tables
+
+
+@pytest.mark.parametrize(
+    ("sqlite_version", "expected_journal_mode"),
+    (
+        ((3, 44, 5), "delete"),
+        ((3, 44, 6), "wal"),
+        ((3, 50, 4), "delete"),
+        ((3, 50, 7), "wal"),
+        ((3, 51, 2), "delete"),
+        ((3, 51, 3), "wal"),
+    ),
+)
+def test_migration_avoids_wal_reset_corruption_versions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sqlite_version: tuple[int, int, int],
+    expected_journal_mode: str,
+) -> None:
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", sqlite_version)
+    connection = sqlite3.connect(tmp_path / "journal-mode.db")
+
+    initialize_database(connection)
+
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == (
+        expected_journal_mode
+    )
 
 
 def test_repository_round_trips_all_entities_and_preserves_event_order(

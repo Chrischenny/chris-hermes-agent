@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 SCHEMA_VERSION = 1
+
+logger = logging.getLogger(__name__)
 
 _CORE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS plugin_metadata (
@@ -116,9 +119,32 @@ CREATE TABLE IF NOT EXISTS task_search_fallback (
 """
 
 
+def _has_wal_reset_corruption_bug(version_info: tuple[int, ...]) -> bool:
+    """Match SQLite's published WAL-reset vulnerability and backports."""
+    version = (*version_info, 0, 0, 0)[:3]
+    if version < (3, 7, 0) or version >= (3, 51, 3):
+        return False
+    if (3, 50, 7) <= version < (3, 51, 0):
+        return False
+    return not ((3, 44, 6) <= version < (3, 45, 0))
+
+
+def _configure_journal_mode(connection: sqlite3.Connection) -> None:
+    version = sqlite3.sqlite_version_info
+    if _has_wal_reset_corruption_bug(version):
+        connection.execute("PRAGMA journal_mode=DELETE")
+        logger.warning(
+            "chris-hermes-agent: SQLite %s has the WAL-reset corruption bug; "
+            "using journal_mode=DELETE for plugin state.",
+            sqlite3.sqlite_version,
+        )
+        return
+    connection.execute("PRAGMA journal_mode=WAL")
+
+
 def initialize_database(connection: sqlite3.Connection) -> str:
     """Apply idempotent migrations and return the selected search backend."""
-    connection.execute("PRAGMA journal_mode=WAL")
+    _configure_journal_mode(connection)
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA busy_timeout=5000")
     current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
