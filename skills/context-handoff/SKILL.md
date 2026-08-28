@@ -1,7 +1,7 @@
 ---
 name: context-handoff
 description: Manage durable Hermes tasks and active Context Rotation.
-version: 0.4.1
+version: 0.4.2
 author: Chrischenny
 metadata:
   hermes:
@@ -19,6 +19,32 @@ execution noise into a new Context. Task meaning belongs here and in the Task to
 Use this workflow when work may span Context segments or Sessions, when the user changes or
 resumes a Task, or when Runtime Status reports that a configured Handoff sweet zone has been
 reached. Ordinary short work that has no durable Task does not need this workflow.
+
+## Invoke deferred Task tools
+
+Hermes may expose this plugin's Task tools through the generic deferred `tool_call` tool.
+When it does, the outer wrapper contains exactly `name` and `arguments`; put every
+plugin-specific field inside `arguments`. For example, an update is wrapped as:
+
+```json
+{
+  "name": "task_state_manage",
+  "arguments": {
+    "action": "update",
+    "task_id": "task-example",
+    "expected_version": 6,
+    "state": {
+      "current_phase": "verification"
+    }
+  }
+}
+```
+
+Apply the same boundary to `task_event_append` and `checkpoint_create`. Never omit the
+outer `name`. Never place `task_id` outside `arguments` or split tool-specific fields
+between the two levels. If Hermes returns `invalid_argument`, rebuild the wrapper from the
+deferred tool schema and fresh durable identifiers. Never infer a missing Task ID,
+Checkpoint ID, Segment ID, or expected version; keep the mutation fail-closed.
 
 ## Start or re-enter work
 

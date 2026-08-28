@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def test_manifest_declares_native_standalone_plugin() -> None:
 
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
-    assert manifest["version"] == "0.7.1"
+    assert manifest["version"] == "0.7.2"
     assert manifest["manifest_version"] == 1
     assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
@@ -66,7 +67,7 @@ def test_bundled_skill_has_valid_identity() -> None:
     frontmatter = _read_frontmatter(SKILL_PATH)
 
     assert frontmatter["name"] == "context-handoff"
-    assert frontmatter["version"] == "0.4.1"
+    assert frontmatter["version"] == "0.4.2"
     assert "Context" in frontmatter["description"]
 
 
@@ -149,6 +150,27 @@ def test_skill_distinguishes_task_state_from_checkpoint_state() -> None:
     assert "Checkpoint fields" in skill
     assert "`current_state`" in skill
     assert "`rejected_alternatives`" in skill
+
+
+def test_skill_documents_deferred_tool_wrapper_contract() -> None:
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    section = skill.partition("## Invoke deferred Task tools")[2]
+    match = re.search(r"```json\n(?P<payload>.*?)\n```", section, re.DOTALL)
+
+    assert match is not None
+    wrapper = json.loads(match.group("payload"))
+    assert set(wrapper) == {"name", "arguments"}
+    assert wrapper["name"] == "task_state_manage"
+    assert set(wrapper["arguments"]) == {
+        "action",
+        "task_id",
+        "expected_version",
+        "state",
+    }
+    assert wrapper["arguments"]["task_id"]
+    assert "task_id" not in wrapper
+    assert "Never place `task_id` outside `arguments`" in section
+    assert "Never infer a missing Task ID" in section
 
 
 def test_soul_migration_uses_runtime_policy_without_fixed_thresholds() -> None:

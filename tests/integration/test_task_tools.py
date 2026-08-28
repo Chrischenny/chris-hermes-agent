@@ -150,9 +150,24 @@ def test_tools_fail_closed_for_missing_runtime_session_or_bad_arguments(
     bad_action = json.loads(
         handlers.task_state_manage({"action": "unknown"}, session_id="session-1")
     )
+    missing_task_id = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "update",
+                "expected_version": 1,
+                "state": {"current_phase": "verification"},
+            },
+            session_id="session-1",
+        )
+    )
 
     assert missing_session["error"]["code"] == "missing_session_id"
     assert bad_action["error"]["code"] == "invalid_action"
+    assert missing_task_id["ok"] is False
+    assert missing_task_id["error"] == {
+        "code": "invalid_argument",
+        "message": "task_id must be a non-empty string.",
+    }
 
 
 def test_task_state_error_recovers_from_checkpoint_field_confusion(
