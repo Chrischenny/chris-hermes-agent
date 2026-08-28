@@ -60,9 +60,23 @@ _CHECKPOINT_PROPERTIES: dict[str, Any] = {
     "completed": _string_list_schema("Verified outcomes."),
     "current_state": _string_list_schema("Facts required to resume now."),
     "decisions": _string_list_schema("Durable decisions with rationale."),
-    "rejected_alternatives": _string_list_schema(
-        "Rejected alternatives and their rationale."
-    ),
+    "rejected_alternatives": {
+        **_string_list_schema(
+            "Only viable approaches actually considered for this Task and explicitly "
+            "rejected. Each item must explain why it was rejected. Do not put "
+            "constraints, authorization boundaries, general prohibitions, accepted "
+            "decisions, or unresolved known_issues here; use the matching Checkpoint "
+            "field. Use [] when no viable alternative was actually evaluated."
+        ),
+        "items": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "One viable approach actually considered and why it was rejected; "
+                "never a general prohibition or instruction."
+            ),
+        },
+    },
     "known_issues": _string_list_schema("Unresolved issues and impact."),
     "artifacts": _string_list_schema("Exact durable artifact identifiers."),
     "next_actions": {

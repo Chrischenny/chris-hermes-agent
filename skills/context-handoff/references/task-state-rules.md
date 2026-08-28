@@ -21,6 +21,12 @@ the arguments to `handoff_context`. Never guess identifiers from older messages.
 `artifacts`, and non-empty `next_actions`. The Checkpoint-only `current_state` and
 `rejected_alternatives` fields are not valid Task State.
 
+Within a Checkpoint, `rejected_alternatives` contains only viable approaches that were
+actually considered and declined, paired with their rejection rationale. Requirements,
+authorization boundaries, safety rules, and general prohibitions belong in `constraints`;
+accepted choices belong in `decisions`; unresolved problems belong in `known_issues`. Use
+an empty list when no alternative was evaluated.
+
 ## Lifecycle ordering
 
 ### continuation

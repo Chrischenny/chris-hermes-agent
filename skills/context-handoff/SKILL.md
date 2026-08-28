@@ -1,7 +1,7 @@
 ---
 name: context-handoff
 description: Manage durable Hermes tasks and active Context Rotation.
-version: 0.4.2
+version: 0.4.3
 author: Chrischenny
 metadata:
   hermes:
@@ -89,6 +89,14 @@ rejected_alternatives, known_issues, artifacts, next_actions
 All Checkpoint fields are required by `checkpoint_create.checkpoint`, and `next_actions`
 must be non-empty. `current_state` and `rejected_alternatives` are Checkpoint-only; they
 must never be passed to `task_state_manage.state`.
+
+Apply this Rejected-alternative test to every proposed item: **What viable approach did we
+actually consider, and why did we decide not to use it?** Record the item only when both
+parts have a concrete answer, formatted as `Alternative — Rejected because: rationale`.
+General prohibitions, requirements, authorization or safety boundaries belong in
+`constraints`; accepted choices belong in `decisions`; unresolved problems belong in
+`known_issues`. If no viable alternative was actually evaluated, use an empty list. Never
+invent alternatives merely to populate the required field.
 
 ## Maintain the current Task
 

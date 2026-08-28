@@ -43,7 +43,7 @@ def test_manifest_declares_native_standalone_plugin() -> None:
 
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
-    assert manifest["version"] == "0.7.2"
+    assert manifest["version"] == "0.7.3"
     assert manifest["manifest_version"] == 1
     assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
@@ -67,7 +67,7 @@ def test_bundled_skill_has_valid_identity() -> None:
     frontmatter = _read_frontmatter(SKILL_PATH)
 
     assert frontmatter["name"] == "context-handoff"
-    assert frontmatter["version"] == "0.4.2"
+    assert frontmatter["version"] == "0.4.3"
     assert "Context" in frontmatter["description"]
 
 
@@ -128,6 +128,37 @@ def test_checkpoint_reference_covers_runtime_required_fields() -> None:
     ):
         assert field in checkpoint_reference
     assert "checksum" in checkpoint_reference.lower()
+
+
+def test_rejected_alternatives_contract_excludes_other_checkpoint_semantics() -> None:
+    checkpoint_reference = REFERENCE_PATHS["checkpoint-template.md"].read_text(
+        encoding="utf-8"
+    )
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    rejected_schema = CHECKPOINT_CREATE_SCHEMA["parameters"]["properties"][
+        "checkpoint"
+    ]["properties"]["rejected_alternatives"]
+    exposed_contract = " ".join(
+        (
+            rejected_schema["description"],
+            rejected_schema["items"]["description"],
+        )
+    ).lower()
+
+    for concept in (
+        "actually considered",
+        "why it was rejected",
+        "constraints",
+        "decisions",
+        "known_issues",
+        "use []",
+    ):
+        assert concept in exposed_contract
+
+    assert "What viable approach did we consider" in checkpoint_reference
+    assert "general prohibition" in checkpoint_reference
+    assert "If no viable alternative was actually evaluated" in checkpoint_reference
+    assert "Rejected-alternative test" in skill
 
 
 def test_task_tools_publish_closed_nested_payload_schemas() -> None:
