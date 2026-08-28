@@ -24,7 +24,10 @@ call. Read-only Task inspection and search remain available while waiting for
 that choice.
 
 Checkpoint guidance includes all runtime-required fields, a semantic quality
-self-check, Checksum/result validation, and the exact Handoff preflight. The
+self-check, Checksum/result validation, and the exact Handoff preflight.
+`rejected_alternatives` is limited to viable approaches actually evaluated and
+declined with a rationale; constraints, accepted decisions, unresolved issues,
+and generic prohibitions remain in their own fields. The
 companion [`SOUL-snippet.md`](./soul/SOUL-snippet.md) references only the
 current Runtime Policy and contains no fixed model, Token, or ratio threshold.
 It is also the source of the rules now migrated into `chris-avatar`.

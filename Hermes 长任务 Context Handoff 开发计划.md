@@ -717,7 +717,7 @@ Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安�
 `api_version` 和 `config_schema` 仍保留。
 
 用户确认 `gpt-5.6-sol` 使用 ratio Handoff `0.70`、Emergency `0.85`。插件已从
-不可变 Commit `4773e3183982aac450a28e2f29e41db0a48f45ff` 安装并启用，SOUL 规则已迁移，
+不可变 Commit `6c1e497672386a9aad0cda952c61f0a1ba9ff3af` 安装并启用，SOUL 规则已迁移，
 `context.engine` 已切换为 `context-handoff`。按 272,000 Context Limit，运行时解析
 阈值为 190,400/231,200 Token。上线前快照位于
 `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`，Checksum 与
@@ -739,6 +739,14 @@ WAL-reset 风险版本并在此环境使用 DELETE journal，同时将插件数�
 外层 `name`，随后又把 `task_id` 放在外层而非 `arguments` 内；失败调用没有写入，
 正确重试后 Task 更新成功。0.7.2 在 bundled Skill 中加入双层 JSON 示例与明确的
 fail-closed 规则，并用契约测试解析示例、用集成测试固定缺失 `task_id` 的拒绝行为。
+
+真实 Checkpoint 又暴露出 `rejected_alternatives` 的语义边界过弱：Agent 两次把普通
+禁令、授权边界和真正否决的技术方案混在同一字段。0.7.3 将 Tool Schema、bundled
+Skill、Checkpoint 模板和状态规则统一为“实际评估并否决的可行方案 + 否决理由”，
+明确其他内容分别进入 `constraints`、`decisions` 或 `known_issues`，没有候选方案时
+使用空数组；契约测试固定该排他边界。安装前后数据库完整性均为 `ok`，Gateway 与
+Desktop serve 于 2026-08-28 17:18 CST 重启后保持 active/running，serve 的
+`/api/health` 与 `/api/status` 均返回 HTTP 200。
 
 ## 15. 测试计划
 
