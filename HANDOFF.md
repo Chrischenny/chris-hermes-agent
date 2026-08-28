@@ -1,8 +1,8 @@
 # Hermes Context Handoff 开发交接
 
-> 交接时间：2026-08-27
+> 交接时间：2026-08-28
 >
-> 交接边界：P7 已部署到 `chris-avatar`，初始运行观察通过
+> 交接边界：P7 `0.7.2` 已部署到 `chris-avatar`，真实任务持续运行
 >
 > 下一阶段：使用真实小型开发任务持续观察首次 Handoff/Emergency 证据
 
@@ -21,6 +21,7 @@
 - P7 上线安全修复：`2927a05 fix: avoid vulnerable SQLite WAL mode`
 - P7 状态权限修复：`5adc9dc fix: restrict plugin state permissions`
 - P7 真机 Schema 修复：`cef29f6 fix: expose durable state tool schemas`
+- P7 Deferred Tool 包装加固：`4773e31 fix: document deferred task tool wrapper`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -335,8 +336,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 - 普通路径不会调用 Hermes 默认 Compression；显式 Emergency 路径委托给 Hermes
   原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
-- 已从不可变 Commit `cef29f6c8de531f06e724c32a3481204d3a7d4a5` 安装到
-  `chris-avatar`，插件版本为 `0.7.1`；
+- 已从不可变 Commit `4773e3183982aac450a28e2f29e41db0a48f45ff` 安装到
+  `chris-avatar`，插件版本为 `0.7.2`；
 - 插件已启用且未授予 built-in tool override 权限，`context.engine` 已切换为
   `context-handoff`；
 - Profile Policy 为 ratio Handoff `0.70`、Emergency `0.85`；实际运行时解析到
@@ -354,8 +355,11 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
   混淆 Task `in_progress` 与 Checkpoint `current_state/rejected_alternatives`，两次
   创建均 fail closed 且没有半成品数据；0.7.1 已补全闭合 Schema、Skill 字段边界和
   可恢复错误提示；
-- 修复部署后的线上数据库仍无 Task/Event/Segment，等待用户从原会话重新执行创建；
-  首次成功 Handoff/Emergency 的交叉追溯证据由后续实际工作负载观察补充。
+- 后续真实任务发生一次可恢复的 Hermes deferred `tool_call` 包装错误：模型先遗漏
+  外层 `name`，再把 `task_id` 放在外层而非 `arguments`；失败调用没有写入，正确
+  重试后成功。0.7.2 已增加双层 JSON 示例并禁止猜测缺失的持久化 ID/版本；
+- 0.7.2 部署后线上数据库完整性为 `ok`，保留 1 个 Task、37 个 Event、9 个
+  Checkpoint、9 个 Segment 和 1 个活动 Session Pointer；重装未丢失持久化状态；
 - 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
 - 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
   no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
@@ -418,8 +422,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 
 P7 最终验证与上线结果：
 
-- 126 个单元/契约/集成/E2E 测试全部通过；
-- 总覆盖率 87.11%，超过 80% 门槛；
+- 127 个单元/契约/集成/E2E 测试全部通过；
+- 总覆盖率 87.20%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -435,6 +439,9 @@ P7 最终验证与上线结果：
 - Desktop 真机回归确认插件 Skill/Tools 均可加载；0.7.1 的 installed-path Schema
   探针确认 12 个 Task 字段、10 个必填 Checkpoint 字段完整可见，两个嵌套对象均
   `additionalProperties: false`；
+- 0.7.2 的 Skill 契约会解析 deferred `tool_call` JSON 示例并验证外层只含
+  `name/arguments`、`task_id` 位于内层；集成测试继续验证缺失 `task_id` 时返回
+  `invalid_argument`；
 - Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
   因仓库当前没有授权文件，本阶段不代替用户指定许可证；
 - `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
@@ -476,9 +483,9 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
   `should_compress()` 的 Request Pressure 才是 Emergency 触发的权威输入；
 - Hermes v0.20.5 自带 Python 当前链接 SQLite 3.50.4；插件已安全回退 DELETE
   journal，但后续可在独立维护窗口升级 Hermes/SQLite；
-- 0.7.1 部署后尚未产生首次成功 Task/Handoff/Emergency 事件；用户已停止失败轮次，
-  等待从原 Desktop 会话重试。观察期间应保留数据库、归档和对应时间戳，异常时
-  不要先清理证据。
+- deferred wrapper 约束属于模型提示加固，不能保证模型永不产生格式错误；插件仍
+  必须 fail closed。观察期间应保留数据库、归档和对应时间戳，异常时不要先清理
+  证据。
 
 ## 9. Rejected Alternatives
 
@@ -505,8 +512,8 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 P7 部署与初始观察已完成，接下来按真实工作负载持续验证：
 
-1. 用户在原 Desktop 会话重新加载 `chris-hermes-agent:context-handoff` 并创建
-   当前真实开发 Task，确认 0.7.1 不再混淆 Task/Checkpoint 字段；
+1. 用户继续当前 Desktop 真实开发 Task，观察 0.7.2 是否避免 deferred Tool 外层/
+   内层字段混淆；
 2. 首次接近 Handoff 甜区时，核对 Runtime Status、Task、Checkpoint、Event 和
    Segment 是否可交叉追溯；
 3. 若实际触发 Emergency，保留 Archive、数据库和日志，成功后尽快补建正式

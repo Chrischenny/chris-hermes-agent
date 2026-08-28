@@ -706,7 +706,7 @@ Doctor 均通过。
 
 完成标准：所有验收标准通过，并具备一键回滚路径。
 
-完成证据：126 个测试通过，总覆盖率 87.11%。真实 Hermes Host 测试覆盖 Tool
+完成证据：127 个测试通过，总覆盖率 87.20%。真实 Hermes Host 测试覆盖 Tool
 Schema Request Pressure、Compression no-progress 边界、Emergency 后正式
 Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安装测试通过
 标准 `plugins install`、installed-path Doctor、配置注入、ContextEngine 选择及
@@ -717,7 +717,7 @@ Checkpoint/Handoff、canonical Session 不变和独立进程恢复；隔离安�
 `api_version` 和 `config_schema` 仍保留。
 
 用户确认 `gpt-5.6-sol` 使用 ratio Handoff `0.70`、Emergency `0.85`。插件已从
-不可变 Commit `cef29f6c8de531f06e724c32a3481204d3a7d4a5` 安装并启用，SOUL 规则已迁移，
+不可变 Commit `4773e3183982aac450a28e2f29e41db0a48f45ff` 安装并启用，SOUL 规则已迁移，
 `context.engine` 已切换为 `context-handoff`。按 272,000 Context Limit，运行时解析
 阈值为 190,400/231,200 Token。上线前快照位于
 `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`，Checksum 与
@@ -734,6 +734,11 @@ WAL-reset 风险版本并在此环境使用 DELETE journal，同时将插件数�
 `in_progress` 与 Checkpoint `current_state/rejected_alternatives`，插件正确拒绝且没有
 写入半成品。0.7.1 已公开两套完整闭合字段 Schema，在 Skill 中增加字段边界，并在
 `invalid_state` 中返回可恢复提示；installed-path 探针和真机双进程重启均通过。
+
+后续真实任务在 Hermes deferred `tool_call` 包装层发生一次可恢复错误：模型遗漏
+外层 `name`，随后又把 `task_id` 放在外层而非 `arguments` 内；失败调用没有写入，
+正确重试后 Task 更新成功。0.7.2 在 bundled Skill 中加入双层 JSON 示例与明确的
+fail-closed 规则，并用契约测试解析示例、用集成测试固定缺失 `task_id` 的拒绝行为。
 
 ## 15. 测试计划
 

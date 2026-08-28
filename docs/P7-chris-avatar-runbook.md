@@ -6,8 +6,9 @@
   `0.85`.
 - Runtime Context Limit: 272,000; resolved thresholds: 190,400 and 231,200 Token.
 - Current installed immutable Commit:
-  `cef29f6c8de531f06e724c32a3481204d3a7d4a5` (plugin `0.7.1`). This supersedes
-  the initial 0.7.0 deployment after a live Task/Checkpoint nested-Schema failure.
+  `4773e3183982aac450a28e2f29e41db0a48f45ff` (plugin `0.7.2`). This supersedes
+  0.7.1 after a recovered live deferred `tool_call` wrapper error placed `task_id`
+  outside `arguments`.
 - Protected pre-rollout backup:
   `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`.
 - `context.engine=context-handoff`; SOUL migration and installed-path Doctor passed.
@@ -16,8 +17,9 @@
   failure.
 - Current Hermes Python links SQLite 3.50.4, so the plugin intentionally selected
   `journal_mode=DELETE`; plugin data directory/database permissions are `0700/0600`.
-- No Task/Handoff/Emergency has yet been created by a real workload. Retain the backup,
-  plugin database, archives, logs, timestamp, and Session ID if an issue appears.
+- The live database retained 1 Task, 37 Events, 9 Checkpoints, 9 Segments, and 1 active
+  Session pointer across the 0.7.2 reinstall. Retain the backup, plugin database, archives,
+  logs, timestamp, and Session ID if an issue appears.
 
 This runbook is the live boundary for P7. The isolated test suite may run at any time, but
 do not execute the backup, install, Profile mutation, Gateway restart, or rollback commands
