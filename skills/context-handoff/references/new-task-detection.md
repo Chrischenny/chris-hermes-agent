@@ -27,12 +27,21 @@ active Task, append a classification Decision, or call `handoff_context` before 
 Read-only reconciliation is allowed while waiting: `task_state_manage` actions `get`, `list`,
 and `search` do not commit to a classification.
 
-## Resume requests
+## Continuation and resume discovery
 
 A request to return to previous work is a resume lookup, not a `new_task`:
 
-1. Search paused and blocked Tasks using the user's goal language and useful aliases.
-2. Resume a unique, clearly matching candidate.
-3. If multiple candidates are comparable, show concise titles/goals and ask the user to
+1. When history supplies an exact Task ID, call `task_state_manage` with `action: get` and
+   that ID. Never replace this authoritative lookup with search, and never infer that the
+   Task is absent because search returned no candidates.
+2. Without an exact ID, search or list all unfinished statuses: `active`, `paused`, and
+   `blocked`. Expand the user's wording with known aliases and inspect candidate state and
+   the latest Checkpoint; title-string equality is not required.
+3. If the clearly matching Task is `active` in another Session, you must not call `create`.
+   Report the existing Task and keep state unchanged because this version does not attach
+   an active Task to a new Session.
+4. Resume a unique, clearly matching `paused` or `blocked` candidate.
+5. If multiple candidates are comparable, show concise titles/goals and ask the user to
    choose; similarity order alone is not authorization to mutate state.
-4. If no candidate matches, tell the user and classify any newly stated goal normally.
+6. Only after exact lookup and all-unfinished discovery find no matching Task may you report
+   that no continuation candidate exists and classify a newly stated goal normally.

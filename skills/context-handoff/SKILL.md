@@ -1,7 +1,7 @@
 ---
 name: context-handoff
 description: Manage durable Hermes tasks and active Context Rotation.
-version: 0.4.3
+version: 0.4.4
 author: Chrischenny
 metadata:
   hermes:
@@ -53,14 +53,23 @@ On a long task, a changed user goal, or a resume request:
 1. Read the final `[Runtime Status]` message. Treat its Task, Segment, model policy,
    estimated usage, and last actual usage as runtime facts for this request only.
 2. Call `task_state_manage` with `action: get` to reconcile the durable active Task.
-3. Classify the request before changing durable state. Read
+3. If Session history or another durable record gives an exact Task ID, immediately call
+   `task_state_manage` with `action: get` and that `task_id`. This exact lookup is
+   authoritative; a search with no candidates never means that the known Task does not
+   exist.
+4. For continuation discovery without an exact ID, search or list every unfinished status:
+   `active`, `paused`, and `blocked`. Do not limit continuation discovery to resumable
+   statuses.
+5. Classify the request before changing durable state. Read
    [new-task detection](references/new-task-detection.md) whenever the request may be a
    continuation, subtask, independent task, or resume.
-4. If the classification is `ambiguous` and choosing would change Task or Context state,
+6. If the classification is `ambiguous` and choosing would change Task or Context state,
    ask the user before any state-changing tool call.
 
 Do not create a second Task for ordinary continuation. Do not rotate merely because a new
-user message arrived.
+user message arrived. If the resolved continuation target is an `active` Task owned by
+another Session, you must not call `create`. This version has no cross-Session attach
+operation: report the existing Task and leave durable state unchanged instead of forking it.
 
 ## Task State fields versus Checkpoint fields
 
@@ -159,13 +168,18 @@ target Task; creation atomically pauses the old Task after validating its Checkp
 subtask receives `parent_task_id` and only explicitly selected inherited state. Create a
 separate Checkpoint owned by the newly active target Task, then call `handoff_context` with
 the target Task and Segment returned by creation. The target Checkpoint is required because
-a parent Checkpoint cannot bootstrap another Task.
+a parent Checkpoint cannot bootstrap another Task. A new Task must use its own
+`task-artifacts/<task-id>/` artifact namespace for outputs. It must never use another
+Task's artifact namespace as its output directory. An explicitly selected parent artifact
+may be carried into a child Task only as a read-only input.
 
-For resume, search paused and blocked Tasks. Resume a single clear candidate; ask the user
-to choose among comparable candidates. Before resume, checkpoint any different unfinished
-active Task. A successful `task_state_manage` resume updates the durable pointer but reports
-`context_rotation_required: true`; call `handoff_context` explicitly with its returned Task,
-Segment, and Checkpoint. Resume is incomplete until `handoff_applied: true`.
+For resume, first perform continuation discovery across all unfinished statuses, then call
+`resume` only when the selected Task is `paused` or `blocked`. Resume a single clear
+candidate; ask the user to choose among comparable candidates. Before resume, checkpoint
+any different unfinished active Task. A successful `task_state_manage` resume updates the
+durable pointer but reports `context_rotation_required: true`; call `handoff_context`
+explicitly with its returned Task, Segment, and Checkpoint. Resume is incomplete until
+`handoff_applied: true`.
 
 Detailed ordering, inheritance rules, and failure behavior are in
 [task state rules](references/task-state-rules.md).

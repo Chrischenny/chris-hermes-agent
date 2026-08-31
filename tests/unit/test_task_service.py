@@ -93,6 +93,56 @@ def test_starting_new_task_requires_checkpoint_then_pauses_old_task(
     }
 
 
+def test_independent_task_cannot_claim_another_task_artifact_namespace(
+    tmp_path: Path,
+) -> None:
+    repository, service, _ = _services(tmp_path / "data.db")
+    owner = service.create_task(
+        "session-owner",
+        "Owner",
+        "Produce durable output",
+        task_id="task-owner",
+    )
+    foreign_artifact = "/profile/task-artifacts/task-owner/m5-batch5g-scope.md"
+
+    with pytest.raises(TaskServiceError) as rejected:
+        service.create_task(
+            "session-new",
+            "Independent",
+            "Produce independent output",
+            state={"artifacts": [foreign_artifact]},
+            task_id="task-independent",
+        )
+
+    assert rejected.value.code == "foreign_task_artifact_namespace"
+    assert repository.get_task("task-independent") is None
+    assert repository.get_task(owner.task.task_id) is not None
+
+
+def test_subtask_may_inherit_parent_artifact_as_read_only_input(
+    tmp_path: Path,
+) -> None:
+    _, service, _ = _services(tmp_path / "data.db")
+    service.create_task(
+        "session-parent",
+        "Parent",
+        "Produce parent input",
+        task_id="task-parent",
+    )
+    parent_artifact = "/profile/task-artifacts/task-parent/input.md"
+
+    child = service.create_task(
+        "session-child",
+        "Child",
+        "Consume selected parent input",
+        state={"artifacts": [parent_artifact]},
+        parent_task_id="task-parent",
+        task_id="task-child",
+    )
+
+    assert child.task.artifacts == (parent_artifact,)
+
+
 def test_search_and_cross_session_resume_uses_latest_checkpoint(tmp_path: Path) -> None:
     repository, service, checkpoints = _services(tmp_path / "data.db")
     hermes = service.create_task(

@@ -91,7 +91,10 @@ TASK_STATE_MANAGE_SCHEMA: dict[str, Any] = {
     "description": (
         "Create, inspect, update, pause, search, resume, block, complete, or "
         "cancel durable long-running tasks. Starting a new task pauses an "
-        "unfinished active task only after a valid checkpoint exists."
+        "unfinished active task only after a valid checkpoint exists. When an "
+        "exact Task ID is known, use action=get; an empty search never proves that "
+        "Task is absent. Search defaults to every unfinished status. Do not create "
+        "a duplicate when a continuation target is active in another Session."
     ),
     "parameters": {
         "type": "object",
@@ -112,7 +115,14 @@ TASK_STATE_MANAGE_SCHEMA: dict[str, Any] = {
                     "finalize",
                 ],
             },
-            "task_id": {"type": "string", "minLength": 1},
+            "task_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Exact durable Task ID. If history supplies this ID, use "
+                    "action=get instead of search to verify existence."
+                ),
+            },
             "parent_task_id": {"type": "string", "minLength": 1},
             "expected_version": {"type": "integer", "minimum": 0},
             "query": {"type": "string"},
@@ -396,7 +406,11 @@ class TaskToolHandlers:
                 query=str(args.get("query") or ""),
                 statuses=self._status_args(
                     args,
-                    default=(TaskStatus.PAUSED, TaskStatus.BLOCKED),
+                    default=(
+                        TaskStatus.ACTIVE,
+                        TaskStatus.PAUSED,
+                        TaskStatus.BLOCKED,
+                    ),
                 ),
                 limit=self._limit_arg(args),
             )

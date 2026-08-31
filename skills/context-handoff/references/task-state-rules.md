@@ -34,6 +34,11 @@ an empty list when no alternative was evaluated.
 Update the existing Task and append selective events. Do not create a Task, change
 `parent_task_id`, or isolate Context solely because the user sent a follow-up.
 
+If history provides an exact Task ID, verify it with `action: get`; search is not an
+existence check. Without an exact ID, continuation discovery must include `active`,
+`paused`, and `blocked`. When the selected Task is active in another Session, you must not
+call `create`; leave state unchanged and report that the existing Session still owns it.
+
 ### subtask
 
 1. Make the parent Task state current and create a parent Checkpoint.
@@ -49,6 +54,11 @@ Update the existing Task and append selective events. Do not create a Task, chan
 Use the same ordering as `subtask`, but omit `parent_task_id` and inherited parent state. The
 new Task receives its own goal, Checkpoint, Segment, Decisions, and Artifacts. The old Task's
 Tool Trace and conversation history are not copied into the selected Context.
+
+Every new Task owns its own `task-artifacts/<task-id>/` artifact namespace for outputs. A
+new independent Task must not write to or declare another Task's artifact namespace as its
+output directory. A child may retain an explicitly selected parent artifact only as a
+read-only input; that does not transfer ownership of the parent's directory.
 
 ### resume
 

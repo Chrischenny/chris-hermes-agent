@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -101,6 +102,7 @@ class TaskService:
         if parent_task_id is not None:
             self._require_text(parent_task_id, "parent_task_id")
         normalized = self._normalize_state(state or {})
+        resolved_task_id = task_id or new_id("task")
         now = utc_now()
         with self.repository.transaction():
             if parent_task_id and self.repository.get_task(parent_task_id) is None:
@@ -108,13 +110,18 @@ class TaskService:
                     "parent_task_not_found",
                     f"Parent task {parent_task_id!r} does not exist.",
                 )
+            self._validate_created_task_artifacts(
+                resolved_task_id,
+                parent_task_id,
+                normalized.get("artifacts", ()),
+            )
             session_state = self.repository.get_session_state(session_id)
             if session_state and session_state.active_task_id:
                 current = self._require_task(session_state.active_task_id)
                 self._pause_for_switch(current, session_state, now)
 
             task = TaskRecord(
-                task_id=task_id or new_id("task"),
+                task_id=resolved_task_id,
                 parent_task_id=parent_task_id,
                 title=str(normalized.pop("title", title)).strip(),
                 created_session_id=session_id,
@@ -163,6 +170,31 @@ class TaskService:
                     now,
                 )
         return TaskActivation(task, segment, state_result, None)
+
+    @staticmethod
+    def _validate_created_task_artifacts(
+        task_id: str,
+        parent_task_id: str | None,
+        artifacts: object,
+    ) -> None:
+        allowed_owners = {task_id}
+        if parent_task_id is not None:
+            allowed_owners.add(parent_task_id)
+        for artifact in artifacts if isinstance(artifacts, tuple) else ():
+            match = re.search(
+                r"(?:^|[/\\])task-artifacts[/\\]([^/\\]+)(?:[/\\]|$)",
+                artifact,
+            )
+            if match is None or match.group(1) in allowed_owners:
+                continue
+            owner = match.group(1)
+            raise TaskServiceError(
+                "foreign_task_artifact_namespace",
+                f"Artifact {artifact!r} uses Task {owner!r}'s artifact namespace. "
+                "A new independent Task must use its own Task ID for outputs; only "
+                "an explicit child Task may inherit its parent's artifact as a "
+                "read-only input.",
+            )
 
     def get_task(self, task_id: str) -> TaskRecord:
         return self._require_task(task_id)

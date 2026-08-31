@@ -102,6 +102,145 @@ def test_tool_flow_creates_checkpoints_searches_and_resumes_tasks(
     assert resumed["data"]["next_required_action"] == "call_handoff_context"
 
 
+def test_default_search_includes_every_unfinished_task_status(tmp_path: Path) -> None:
+    handlers = _handlers(tmp_path / "data.db")
+
+    active = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "create",
+                "state": {"title": "Active candidate", "goal": "Shared recovery goal"},
+            },
+            session_id="session-active",
+        )
+    )["data"]["task"]
+    paused = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "create",
+                "state": {"title": "Paused candidate", "goal": "Shared recovery goal"},
+            },
+            session_id="session-paused",
+        )
+    )["data"]["task"]
+    handlers.checkpoint_create(
+        {"task_id": paused["task_id"], "checkpoint": _checkpoint(paused["goal"])},
+        session_id="session-paused",
+    )
+    paused = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "pause",
+                "task_id": paused["task_id"],
+                "expected_version": paused["version"],
+            },
+            session_id="session-paused",
+        )
+    )["data"]["task"]
+    blocked = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "create",
+                "state": {"title": "Blocked candidate", "goal": "Shared recovery goal"},
+            },
+            session_id="session-blocked",
+        )
+    )["data"]["task"]
+    handlers.checkpoint_create(
+        {
+            "task_id": blocked["task_id"],
+            "checkpoint": _checkpoint(blocked["goal"]),
+        },
+        session_id="session-blocked",
+    )
+    blocked = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "block",
+                "task_id": blocked["task_id"],
+                "expected_version": blocked["version"],
+            },
+            session_id="session-blocked",
+        )
+    )["data"]["task"]
+    completed = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "create",
+                "state": {
+                    "title": "Completed candidate",
+                    "goal": "Shared recovery goal",
+                },
+            },
+            session_id="session-completed",
+        )
+    )["data"]["task"]
+    completed = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "complete",
+                "task_id": completed["task_id"],
+                "expected_version": completed["version"],
+            },
+            session_id="session-completed",
+        )
+    )["data"]["task"]
+
+    search = json.loads(
+        handlers.task_state_manage(
+            {"action": "search", "query": "Shared recovery goal", "limit": 10},
+            session_id="session-new",
+        )
+    )
+    candidates = {
+        candidate["task"]["task_id"]: candidate["task"]["status"]
+        for candidate in search["data"]["candidates"]
+    }
+
+    assert candidates == {
+        active["task_id"]: "active",
+        paused["task_id"]: "paused",
+        blocked["task_id"]: "blocked",
+    }
+    assert completed["task_id"] not in candidates
+
+
+def test_exact_get_finds_cross_session_task_even_when_filtered_search_is_empty(
+    tmp_path: Path,
+) -> None:
+    handlers = _handlers(tmp_path / "data.db")
+    task = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "create",
+                "state": {"title": "Known active task", "goal": "Continue known work"},
+            },
+            session_id="session-old",
+        )
+    )["data"]["task"]
+
+    filtered_search = json.loads(
+        handlers.task_state_manage(
+            {
+                "action": "search",
+                "query": "Continue known work",
+                "statuses": ["paused", "blocked"],
+            },
+            session_id="session-new",
+        )
+    )
+    exact_get = json.loads(
+        handlers.task_state_manage(
+            {"action": "get", "task_id": task["task_id"]},
+            session_id="session-new",
+        )
+    )
+
+    assert filtered_search["data"]["candidates"] == []
+    assert exact_get["data"]["task"]["task_id"] == task["task_id"]
+    assert exact_get["data"]["task"]["status"] == "active"
+
+
 def test_event_tool_appends_supported_event_and_rejects_unknown_type(
     tmp_path: Path,
 ) -> None:

@@ -43,7 +43,7 @@ def test_manifest_declares_native_standalone_plugin() -> None:
 
     assert manifest["name"] == "chris-hermes-agent"
     assert manifest["kind"] == "standalone"
-    assert manifest["version"] == "0.7.3"
+    assert manifest["version"] == "0.7.4"
     assert manifest["manifest_version"] == 1
     assert manifest["api_version"] == 1
     assert manifest["skill_namespace"] == "chris-hermes-agent"
@@ -67,7 +67,7 @@ def test_bundled_skill_has_valid_identity() -> None:
     frontmatter = _read_frontmatter(SKILL_PATH)
 
     assert frontmatter["name"] == "context-handoff"
-    assert frontmatter["version"] == "0.4.3"
+    assert frontmatter["version"] == "0.4.4"
     assert "Context" in frontmatter["description"]
 
 
@@ -107,6 +107,23 @@ def test_task_workflow_references_define_classification_and_isolation_contracts(
     assert "Tool Trace" in state_rules
     assert "context_rotation_required" in state_rules
     assert "handoff_applied" in state_rules
+
+
+def test_continuation_discovery_contract_prevents_duplicate_cross_session_tasks() -> (
+    None
+):
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    detection = REFERENCE_PATHS["new-task-detection.md"].read_text(encoding="utf-8")
+    state_rules = REFERENCE_PATHS["task-state-rules.md"].read_text(encoding="utf-8")
+    contract = "\n".join((skill, detection, state_rules))
+
+    assert "exact Task ID" in contract
+    assert "action: get" in contract
+    assert "active`, `paused`, and `blocked" in contract
+    assert "another Session" in contract
+    assert "must not call `create`" in contract
+    assert "artifact namespace" in contract
+    assert "read-only input" in contract
 
 
 def test_checkpoint_reference_covers_runtime_required_fields() -> None:
