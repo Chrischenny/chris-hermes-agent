@@ -1,25 +1,26 @@
 # P7 `chris-avatar` rollout and rollback
 
-## Deployment record — 2026-08-28
+## Deployment record — 2026-08-31
 
 - User-approved Policy: `gpt-5.6-sol` ratio Handoff `0.70`, Emergency enabled at
   `0.85`.
 - Runtime Context Limit: 272,000; resolved thresholds: 190,400 and 231,200 Token.
 - Current installed immutable Commit:
-  `6c1e497672386a9aad0cda952c61f0a1ba9ff3af` (plugin `0.7.3`). This supersedes
-  0.7.2 after live Checkpoints twice mixed general prohibitions and authorization
-  boundaries into `rejected_alternatives`; the field contract now accepts only viable
-  approaches actually evaluated and declined, paired with their rationale.
+  `4e3a2c8d356ab09c0100c8f82a9791c23c17f525` (plugin `0.7.4`). This supersedes
+  0.7.3 after a new Session missed an active continuation Task, created a duplicate, and
+  reused the original Task's artifact namespace. Exact IDs now require `get`, default
+  discovery covers every unfinished status, and independent Task creation rejects a
+  foreign Task artifact namespace.
 - Protected pre-rollout backup:
-  `/home/chen/hermes-rollout-backups/chris-avatar-20260827T083122Z`.
+  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.4-20260831T101054Z`.
 - `context.engine=context-handoff`; SOUL migration and installed-path Doctor passed.
 - `hermes-gateway-chris-avatar.service` and the Desktop `hermes-dashboard.service`
-  restarted at 2026-08-28 17:18 CST and remained active/running; the serve process listened
-  on port 9119 and `/api/health` plus `/api/status` returned HTTP 200.
+  restarted at 2026-08-31 18:11 CST and remained active/running; the serve process listened
+  on port 9119 and `/api/health` returned HTTP 200.
 - Current Hermes Python links SQLite 3.50.4, so the plugin intentionally selected
   `journal_mode=DELETE`; plugin data directory/database permissions are `0700/0600`.
-- The live database retained 2 Tasks, 70 Events, 14 Checkpoints, 15 Segments, and 1 active
-  Session pointer across the 0.7.3 reinstall. Retain the backup, plugin database, archives,
+- The live database retained 3 Tasks, 159 Events, 45 Checkpoints, 45 Segments, and 2 active
+  Session pointers across the 0.7.4 reinstall. Retain the backup, plugin database, archives,
   logs, timestamp, and Session ID if an issue appears.
 
 This runbook is the live boundary for P7. The isolated test suite may run at any time, but

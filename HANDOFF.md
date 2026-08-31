@@ -1,10 +1,10 @@
 # Hermes Context Handoff 开发交接
 
-> 交接时间：2026-08-28
+> 交接时间：2026-08-31
 >
-> 交接边界：P7 `0.7.3` 已部署到 `chris-avatar`，真实任务持续运行
+> 交接边界：P7 `0.7.4` 已部署到 `chris-avatar`，跨会话 continuation 防分叉加固已上线
 >
-> 下一阶段：使用真实小型开发任务持续观察首次 Handoff/Emergency 证据
+> 下一阶段：继续真实任务，验证新会话能发现 active Task 且不再创建重复 Task
 
 ## 1. Task
 
@@ -23,6 +23,7 @@
 - P7 真机 Schema 修复：`cef29f6 fix: expose durable state tool schemas`
 - P7 Deferred Tool 包装加固：`4773e31 fix: document deferred task tool wrapper`
 - P7 Checkpoint 语义加固：`6c1e497 fix: clarify rejected alternative semantics`
+- P7 跨会话 continuation 加固：`4e3a2c8 fix: prevent duplicate continuation task forks`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -337,8 +338,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 - 普通路径不会调用 Hermes 默认 Compression；显式 Emergency 路径委托给 Hermes
   原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
-- 已从不可变 Commit `6c1e497672386a9aad0cda952c61f0a1ba9ff3af` 安装到
-  `chris-avatar`，插件版本为 `0.7.3`；
+- 已从不可变 Commit `4e3a2c8d356ab09c0100c8f82a9791c23c17f525` 安装到
+  `chris-avatar`，插件版本为 `0.7.4`、bundled Skill 版本为 `0.4.4`；
 - 插件已启用且未授予 built-in tool override 权限，`context.engine` 已切换为
   `context-handoff`；
 - Profile Policy 为 ratio Handoff `0.70`、Emergency `0.85`；实际运行时解析到
@@ -366,6 +367,22 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
   方案时必须使用空数组；
 - 0.7.3 部署后线上数据库完整性为 `ok`，保留 2 个 Task、70 个 Event、14 个
   Checkpoint、15 个 Segment 和 1 个活动 Session Pointer；重装未丢失持久化状态；
+- 新会话 continuation 实测暴露出默认搜索仅查 `paused/blocked`：Agent 在旧 Task
+  仍为 `active` 时错误推断其不存在，创建了重复 Task，并把旧 Task artifact 路径
+  复制到新 Task。0.7.4 将默认搜索改为全部未结束状态，规定历史确切 Task ID 必须
+  `get`，禁止为另一 Session 的已识别 active Task 调用 `create`；独立新 Task 若在
+  创建时声明另一 Task 的 `task-artifacts/<task-id>/` 命名空间会由服务端拒绝，显式
+  子 Task 只允许把父 Task artifact 当只读输入；
+- 0.7.4 安装前快照位于
+  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.4-20260831T101054Z`。安装后线上
+  SQLite 完整性为 `ok`，保留 3 个 Task、159 个 Event、45 个 Checkpoint、45 个
+  Segment 和 2 个活动 Session Pointer；数据库目录/文件权限仍为 `0700/0600`；
+- 2026-08-31 18:11 CST 已重启 `hermes-gateway-chris-avatar.service` 和承载 Desktop
+  的 `hermes-dashboard.service`，两者均为 active/running、`NRestarts=0`，serve
+  继续监听端口 9119，`/api/health` 返回 `ok`。Dashboard 在 multiple gateway
+  模式下的聚合 `/api/status` 仍显示 gateway degraded/stopped，但独立 chris-avatar
+  gateway 进程 PID 与 systemd 状态正常；当前账户无 journal 权限，未声称完成日志
+  内容扫描；
 - 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
 - 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
   no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
@@ -428,8 +445,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 
 P7 最终验证与上线结果：
 
-- 127 个单元/契约/集成/E2E 测试全部通过；
-- 总覆盖率 87.20%，超过 80% 门槛；
+- 133 个单元/契约/集成/E2E 测试全部通过；
+- 总覆盖率 87.98%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -450,6 +467,8 @@ P7 最终验证与上线结果：
   `invalid_argument`；
 - 0.7.3 的契约测试同时固定 Skill、Checkpoint 模板和 Tool Schema 对
   `rejected_alternatives` 的排他边界，并验证空数组是合法的“没有评估候选方案”；
+- 0.7.4 增加 exact-ID `get`、默认搜索三种未结束状态、跨 Session active 禁止重复
+  创建的 Skill 契约，以及独立 Task artifact 命名空间拒绝/父子只读继承测试；
 - Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
   因仓库当前没有授权文件，本阶段不代替用户指定许可证；
 - `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
@@ -481,6 +500,8 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
 - 上一 Response 真实 Usage 会滞后一轮，这是设计中的校准数据；
 - Resume Tool 不直接执行 Rotation；它返回明确的下一步，Agent 必须再调用
   `handoff_context`；
+- 当前版本尚未实现把另一 Session 的 active Task 接入新 Session；发现该候选后会
+  保持状态不变并要求回到原 Session，而不是创建重复 Task；
 - 搜索是 Profile 内的结构化/词法召回，不包含远程 Embedding；
 - Emergency 归档包含完整 Active Request，可能含敏感信息；权限和 Checksum 已
   收紧，P7 runbook 要求观察期全部保留、验收后至少保留 30 天，清理必须另行
@@ -491,9 +512,9 @@ PYTHONPATH="$HOME/.hermes/hermes-agent" \
   `should_compress()` 的 Request Pressure 才是 Emergency 触发的权威输入；
 - Hermes v0.20.5 自带 Python 当前链接 SQLite 3.50.4；插件已安全回退 DELETE
   journal，但后续可在独立维护窗口升级 Hermes/SQLite；
-- deferred wrapper 与 Checkpoint 语义约束属于模型提示加固，不能保证模型永不产生
-  格式或分类错误；插件仍必须 fail closed。观察期间应保留数据库、归档和对应
-  时间戳，异常时不要先清理证据。
+- exact-ID/continuation 分类和“另一 Session active Task 禁止 create”包含语义判断，
+  因而属于模型协议加固；artifact 命名空间另有服务端 create-time 防线。插件仍须
+  fail closed。观察期间应保留数据库、归档和对应时间戳，异常时不要先清理证据。
 
 ## 9. Rejected Alternatives
 
@@ -520,8 +541,8 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 P7 部署与初始观察已完成，接下来按真实工作负载持续验证：
 
-1. 用户继续当前 Desktop 真实开发 Task，观察 0.7.3 是否同时避免 deferred Tool
-   外层/内层字段混淆和 `rejected_alternatives` 误分类；
+1. 用新会话描述旧任务但不复述精确标题，观察 0.7.4 是否先穷举全部未结束 Task、
+   对历史确切 ID 使用 `get`，并在发现另一 Session 的 active Task 后停止而不 create；
 2. 首次接近 Handoff 甜区时，核对 Runtime Status、Task、Checkpoint、Event 和
    Segment 是否可交叉追溯；
 3. 若实际触发 Emergency，保留 Archive、数据库和日志，成功后尽快补建正式
