@@ -3,4 +3,4 @@
 from .context_engine import ContextHandoffEngine
 
 __all__ = ["ContextHandoffEngine"]
-__version__ = "0.7.4"
+__version__ = "0.7.5"

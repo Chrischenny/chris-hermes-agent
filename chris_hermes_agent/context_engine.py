@@ -243,16 +243,33 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         active_segment_id = (
             state.active_context_segment_id if state is not None else None
         )
-        selected_base = request_messages
+        selection_task_id = active_task_id
+        selection_segment_id = active_segment_id
         if (
             repository is not None
             and state is not None
-            and state.active_task_id is not None
-            and state.active_context_segment_id is not None
+            and active_task_id is None
+            and active_segment_id is None
+            and self._session_id is not None
         ):
-            segment = repository.get_segment(state.active_context_segment_id)
+            recovery_segment = repository.get_latest_segment_for_session(
+                self._session_id
+            )
+            if (
+                recovery_segment is not None
+                and recovery_segment.checkpoint_id is not None
+            ):
+                selection_task_id = recovery_segment.task_id
+                selection_segment_id = recovery_segment.context_segment_id
+        selected_base = request_messages
+        if (
+            repository is not None
+            and selection_task_id is not None
+            and selection_segment_id is not None
+        ):
+            segment = repository.get_segment(selection_segment_id)
             if segment is not None and segment.checkpoint_id is not None:
-                task = repository.get_task(state.active_task_id)
+                task = repository.get_task(selection_task_id)
                 checkpoint = repository.get_checkpoint(segment.checkpoint_id)
                 conversation = conversation_messages or []
                 start_message_index = segment.start_message_index

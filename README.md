@@ -48,6 +48,13 @@ Hermes Session history is not modified or deleted. A corrupt Checkpoint or
 invalid persisted cursor produces an isolated diagnostic Bootstrap rather than
 silently restoring archived trace.
 
+When a Task becomes paused, blocked, completed, or cancelled, its active Task
+and Segment pointers are still cleared. The next request in that same Session
+uses its newest Segment as a read-only recovery cursor when that Segment is
+checkpoint-backed, instead of falling back to the complete canonical history. It
+never skips a newer uncheckpointed Task to recover an older Task's cursor. A newly
+activated Task always takes precedence over this inactive recovery selection.
+
 ## Runtime observation
 
 `ContextHandoffEngine.select_context()` preserves the assembled request prefix

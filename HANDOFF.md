@@ -2,7 +2,8 @@
 
 > 交接时间：2026-08-31
 >
-> 交接边界：P7 `0.7.4` 已部署到 `chris-avatar`，跨会话 continuation 防分叉加固已上线
+> 交接边界：P7 `0.7.4` 已部署到 `chris-avatar`；`0.7.5` 本地候选修复 inactive
+> Task 清空活动指针后完整 canonical history 回灌，尚未部署。
 >
 > 下一阶段：继续真实任务，验证新会话能发现 active Task 且不再创建重复 Task
 

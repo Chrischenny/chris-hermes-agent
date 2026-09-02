@@ -371,6 +371,22 @@ class TaskRepository:
             ).fetchone()
         return self._segment_from_row(row) if row is not None else None
 
+    def get_latest_segment_for_session(
+        self,
+        session_id: str,
+    ) -> ContextSegmentRecord | None:
+        """Return one Session's newest Segment without crossing Task history."""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT * FROM context_segments
+                WHERE session_id = ?
+                ORDER BY start_time DESC, rowid DESC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        return self._segment_from_row(row) if row is not None else None
+
     def update_segment_archive_reference(
         self,
         segment_id: str,

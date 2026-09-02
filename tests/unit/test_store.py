@@ -208,6 +208,65 @@ def test_repository_round_trips_all_entities_and_preserves_event_order(
     assert reopened.get_segment("segment-1").task_id == parent.task_id
 
 
+def test_latest_session_segment_does_not_fall_back_to_an_older_task_cursor(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "latest-session-segment.db")
+    with repository.transaction():
+        repository.create_task(_task())
+        repository.create_checkpoint(_checkpoint())
+        for segment in (
+            ContextSegmentRecord(
+                context_segment_id="checkpointed-old",
+                session_id="session-1",
+                task_id="task-1",
+                parent_segment_id=None,
+                checkpoint_id="checkpoint-1",
+                start_message_index=10,
+                end_message_index=20,
+                start_time="2026-08-26T10:10:00+00:00",
+                end_time="2026-08-26T10:20:00+00:00",
+                handoff_reason="blocked",
+                handoff_policy_snapshot=None,
+                archived_context_reference=None,
+            ),
+            ContextSegmentRecord(
+                context_segment_id="uncheckpointed-newer",
+                session_id="session-1",
+                task_id="task-1",
+                parent_segment_id="checkpointed-old",
+                checkpoint_id=None,
+                start_message_index=20,
+                end_message_index=None,
+                start_time="2026-08-26T10:30:00+00:00",
+                end_time=None,
+                handoff_reason=None,
+                handoff_policy_snapshot=None,
+                archived_context_reference=None,
+            ),
+            ContextSegmentRecord(
+                context_segment_id="other-session",
+                session_id="session-2",
+                task_id="task-1",
+                parent_segment_id="checkpointed-old",
+                checkpoint_id="checkpoint-1",
+                start_message_index=30,
+                end_message_index=None,
+                start_time="2026-08-26T10:40:00+00:00",
+                end_time=None,
+                handoff_reason=None,
+                handoff_policy_snapshot=None,
+                archived_context_reference=None,
+            ),
+        ):
+            repository.create_segment(segment)
+
+    recovered = repository.get_latest_segment_for_session("session-1")
+
+    assert recovered is not None
+    assert recovered.context_segment_id == "uncheckpointed-newer"
+
+
 def test_transaction_rolls_back_all_changes_on_failure(tmp_path: Path) -> None:
     repository = _repository(tmp_path / "data.db")
 
