@@ -1,11 +1,12 @@
 # Hermes Context Handoff 开发交接
 
-> 交接时间：2026-08-31
+> 交接时间：2026-09-02
 >
-> 交接边界：P7 `0.7.4` 已部署到 `chris-avatar`；`0.7.5` 本地候选修复 inactive
-> Task 清空活动指针后完整 canonical history 回灌，尚未部署。
+> 交接边界：P7 `0.7.5` 已部署到 `chris-avatar`；inactive Task 清空活动指针后
+> 完整 canonical history 回灌的问题已修复并完成重启核验。
 >
-> 下一阶段：继续真实任务，验证新会话能发现 active Task 且不再创建重复 Task
+> 下一阶段：继续真实任务，验证新会话能发现并恢复现有 blocked Task，且不再创建
+> 重复 Task
 
 ## 1. Task
 
@@ -339,8 +340,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 - 普通路径不会调用 Hermes 默认 Compression；显式 Emergency 路径委托给 Hermes
   原生 `ContextCompressor`；
 - 不会修改 Hermes Session；
-- 已从不可变 Commit `4e3a2c8d356ab09c0100c8f82a9791c23c17f525` 安装到
-  `chris-avatar`，插件版本为 `0.7.4`、bundled Skill 版本为 `0.4.4`；
+- 已从不可变 Commit `3a01b5c23ec35420e5fbd0fe1c5f37104961e99c` 安装到
+  `chris-avatar`，插件版本为 `0.7.5`、bundled Skill 版本为 `0.4.4`；
 - 插件已启用且未授予 built-in tool override 权限，`context.engine` 已切换为
   `context-handoff`；
 - Profile Policy 为 ratio Handoff `0.70`、Emergency `0.85`；实际运行时解析到
@@ -384,6 +385,16 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
   模式下的聚合 `/api/status` 仍显示 gateway degraded/stopped，但独立 chris-avatar
   gateway 进程 PID 与 systemd 状态正常；当前账户无 journal 权限，未声称完成日志
   内容扫描；
+- 2026-09-02 17:49 CST，真实会话在同一 Turn 调用 `task_state_manage(action=block)`
+  后清空活动 Task/Segment 指针，0.7.4 的下一次 `select_context()` 回退完整 513 条
+  canonical history；Provider 输入从 115,039 跳至约 873,368 Token，并最终以
+  988,668 Token 超限。0.7.5 在活动指针为空时恢复本 Session 最新带 Checkpoint 的
+  Segment，继续使用 Checkpoint Bootstrap 与 Segment Tail，不再回灌完整历史；
+- 0.7.5 部署前快照位于
+  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.5-20260902T095824Z`，Checksum 与
+  SQLite 完整性校验通过。2026-09-02 18:02 CST 已按固定 SHA 重装并重启 Gateway 与
+  Desktop serve；两项服务均为 active/running、`NRestarts=0`，9119 `/api/health`
+  返回 `ok`，installed-path Doctor 通过。当前账户仍无 journal 权限；
 - 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
 - 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
   no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
@@ -542,7 +553,7 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 P7 部署与初始观察已完成，接下来按真实工作负载持续验证：
 
-1. 用新会话描述旧任务但不复述精确标题，观察 0.7.4 是否先穷举全部未结束 Task、
+1. 用新会话描述旧任务但不复述精确标题，观察 0.7.5 是否先穷举全部未结束 Task、
    对历史确切 ID 使用 `get`，并在发现另一 Session 的 active Task 后停止而不 create；
 2. 首次接近 Handoff 甜区时，核对 Runtime Status、Task、Checkpoint、Event 和
    Segment 是否可交叉追溯；
