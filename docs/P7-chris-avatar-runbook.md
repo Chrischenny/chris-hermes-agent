@@ -6,22 +6,23 @@
   `0.85`.
 - Runtime Context Limit: 272,000; resolved thresholds: 190,400 and 231,200 Token.
 - Current installed immutable Commit:
-  `3a01b5c23ec35420e5fbd0fe1c5f37104961e99c` (plugin `0.7.5`). This supersedes
-  0.7.4 after a blocked Task cleared the current Session pointers and the next same-Turn
-  request fell back to the complete canonical history. Inactive Sessions now recover their
-  latest checkpoint-backed Segment for request selection instead of replaying full history.
+  `f7f1765e5d98325406af675ae8e80deae5a673ec` (plugin `0.7.6`). This supersedes
+  0.7.5 after same-Session resume created an active Segment with cursor zero and replayed
+  1,357 canonical messages. Zero-cursor resume Segments now recover the matching current
+  User Turn from direct or deferred resume calls until explicit rotation establishes the
+  permanent Segment boundary.
 - Protected pre-rollout backup:
-  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.5-20260902T095824Z`.
+  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.6-20260903T023444Z`.
 - `context.engine=context-handoff`; SOUL migration and installed-path Doctor passed.
 - `hermes-gateway-chris-avatar.service` and the Desktop `hermes-dashboard.service`
-  restarted at 2026-09-02 18:02 CST and remained active/running; the serve process listened
+  restarted at 2026-09-03 10:36 CST and remained active/running; the serve process listened
   on port 9119 and `/api/health` returned HTTP 200.
 - Current Hermes Python links SQLite 3.50.4, so the plugin intentionally selected
   `journal_mode=DELETE`; plugin data directory/database permissions are `0700/0600`.
-- The live database passed `PRAGMA integrity_check` across the 0.7.5 reinstall. The triggering
-  Task remains durably blocked at version 47 with its closed Segment and Checkpoint retained.
-  Retain the backup, plugin database, archives, logs, timestamp, and Session ID if an issue
-  appears.
+- The live database passed `PRAGMA integrity_check` across the 0.7.6 reinstall. An installed-path
+  read-only replay of the triggering Session reduced 1,357 canonical messages to 17 selected
+  messages (roughly 29,819 Token) while retaining its Checkpoint Bootstrap. Retain the backup,
+  plugin database, archives, logs, timestamp, and Session ID if an issue appears.
 
 This runbook is the live boundary for P7. The isolated test suite may run at any time, but
 do not execute the backup, install, Profile mutation, Gateway restart, or rollback commands

@@ -3,7 +3,7 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-P7 plugin `0.7.5` is deployed to `chris-avatar`; installed-path Doctor, service
+P7 plugin `0.7.6` is deployed to `chris-avatar`; installed-path Doctor, service
 restart, health, and database integrity checks passed. Isolated integration, real
 Hermes Host/install, restart, 10-rotation, and rollback tests are also complete. The
 first Handoff/Emergency under a real developer
