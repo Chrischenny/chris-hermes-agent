@@ -284,6 +284,86 @@ def test_inactive_task_keeps_latest_checkpoint_segment_as_recovery_context(
     assert "Context segment: none" in str(selected[-1]["content"])
 
 
+@pytest.mark.parametrize("deferred", (False, True))
+def test_same_session_resume_starts_at_current_turn_instead_of_full_history(
+    tmp_path: Path,
+    deferred: bool,
+) -> None:
+    repository = _repository(tmp_path / "same-session-resume.db")
+    tasks = TaskService(repository)
+    active = tasks.create_task("session-1", "P4", "Resume safely", task_id="task-1")
+    CheckpointService(repository).create_checkpoint(
+        "task-1", "session-1", _checkpoint_payload(active.task.goal)
+    )
+    blocked = tasks.transition_task(
+        "task-1",
+        "session-1",
+        expected_version=active.task.version,
+        status=TaskStatus.BLOCKED,
+    )
+    resume_arguments = {
+        "action": "resume",
+        "task_id": "task-1",
+        "expected_version": blocked.version,
+    }
+    resume_function = (
+        {
+            "name": "tool_call",
+            "arguments": json.dumps(
+                {
+                    "name": "task_state_manage",
+                    "arguments": resume_arguments,
+                }
+            ),
+        }
+        if deferred
+        else {
+            "name": "task_state_manage",
+            "arguments": json.dumps(resume_arguments),
+        }
+    )
+    conversation = [
+        {"role": "user", "content": "OLD USER HISTORY"},
+        {"role": "tool", "tool_call_id": "old", "content": "OLD TRACE"},
+        {"role": "user", "content": "CURRENT RESUME REQUEST"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "resume-call",
+                    "type": "function",
+                    "function": resume_function,
+                }
+            ],
+        },
+    ]
+    resumed = tasks.resume_task(
+        "task-1",
+        "session-1",
+        expected_version=blocked.version,
+    )
+    conversation.append(
+        {
+            "role": "tool",
+            "tool_call_id": "resume-call",
+            "content": json.dumps(resumed.to_json_dict()),
+        }
+    )
+    request = [{"role": "system", "content": "stable"}, *conversation]
+    engine = ContextHandoffEngine(repository=repository)
+    engine.on_session_start("session-1")
+
+    selected = engine.select_context(request, conversation_messages=conversation)
+
+    assert resumed.segment.start_message_index == 0
+    assert "OLD USER HISTORY" not in str(selected)
+    assert "OLD TRACE" not in str(selected)
+    assert "CURRENT RESUME REQUEST" in str(selected)
+    assert "resume-call" in str(selected)
+    assert "[Context Handoff Bootstrap]" in str(selected)
+
+
 def test_handoff_tool_fails_closed_without_session_messages_or_valid_trigger(
     tmp_path: Path,
 ) -> None:

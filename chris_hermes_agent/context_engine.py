@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -273,6 +273,13 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                 checkpoint = repository.get_checkpoint(segment.checkpoint_id)
                 conversation = conversation_messages or []
                 start_message_index = segment.start_message_index
+                if start_message_index == 0:
+                    resume_turn_start = self._find_resume_turn_start(
+                        conversation,
+                        selection_task_id,
+                    )
+                    if resume_turn_start is not None:
+                        start_message_index = resume_turn_start
                 diagnostic = None
                 if not 0 <= start_message_index <= len(conversation):
                     diagnostic = "segment_cursor_invalid"
@@ -635,6 +642,66 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             if isinstance(function, dict) and function.get("name") == "handoff_context":
                 return index
         return None
+
+    @classmethod
+    def _find_resume_turn_start(
+        cls,
+        messages: list[dict[str, Any]],
+        task_id: str,
+    ) -> int | None:
+        """Locate the current turn that activated a zero-cursor resume segment."""
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.get("role") != "assistant":
+                continue
+            tool_calls = message.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            if not any(
+                cls._is_matching_resume_call(tool_call, task_id)
+                for tool_call in tool_calls
+            ):
+                continue
+            for turn_start in range(index - 1, -1, -1):
+                if messages[turn_start].get("role") == "user":
+                    return turn_start
+            return index
+        return None
+
+    @staticmethod
+    def _is_matching_resume_call(tool_call: object, task_id: str) -> bool:
+        if not isinstance(tool_call, Mapping):
+            return False
+        function = tool_call.get("function")
+        if not isinstance(function, Mapping):
+            return False
+        name = function.get("name")
+        arguments = ContextHandoffEngine._json_object(function.get("arguments"))
+        if arguments is None:
+            return False
+        if name == "tool_call":
+            if arguments.get("name") != "task_state_manage":
+                return False
+            arguments = ContextHandoffEngine._json_object(arguments.get("arguments"))
+            if arguments is None:
+                return False
+        elif name != "task_state_manage":
+            return False
+        return (
+            arguments.get("action") == "resume" and arguments.get("task_id") == task_id
+        )
+
+    @staticmethod
+    def _json_object(value: object) -> Mapping[str, Any] | None:
+        if isinstance(value, Mapping):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            loaded = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        return loaded if isinstance(loaded, Mapping) else None
 
     @staticmethod
     def _text_arg(args: dict[str, Any], field: str) -> str:
