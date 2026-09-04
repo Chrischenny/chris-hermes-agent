@@ -91,6 +91,18 @@ class CheckpointService:
             }
         )
         with self.repository.transaction():
+            state = self.repository.get_session_state(session_id)
+            if state is None or state.active_task_id != task_id:
+                raise TaskServiceError(
+                    "task_not_active_in_session",
+                    f"Task {task_id!r} is not active in session {session_id!r}.",
+                )
+            owners = self.repository.list_session_states_for_task(task_id)
+            if any(owner.session_id != session_id for owner in owners):
+                raise TaskServiceError(
+                    "task_active_in_multiple_sessions",
+                    f"Task {task_id!r} has another active Session pointer.",
+                )
             self.repository.create_checkpoint(checkpoint)
             self.repository.append_event(
                 task_id=task_id,

@@ -62,6 +62,7 @@ class EmergencyCompressionStatus:
 class RestoredEmergencyContext:
     messages: list[dict[str, Any]]
     conversation_message_count: int
+    conversation_checksum: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +71,35 @@ class EmergencyCompressionResult:
     compressed_messages: list[dict[str, Any]]
     post_request_tokens: int
     status: EmergencyCompressionStatus
+
+
+def conversation_checksum(
+    messages: list[dict[str, Any]],
+    *,
+    count: int | None = None,
+) -> str:
+    """Bind an archive to one exact canonical conversation prefix."""
+    prefix_count = len(messages) if count is None else count
+    if not 0 <= prefix_count <= len(messages):
+        raise ValueError("Conversation checksum count is outside message history.")
+    digest = hashlib.sha256(b"chris-hermes-conversation-v1\0")
+    for message in messages[:prefix_count]:
+        normalized = {
+            key: value
+            for key, value in message.items()
+            if not key.startswith("_") and key != "timestamp" and key != "tool_name"
+        }
+        if "name" not in normalized and isinstance(message.get("tool_name"), str):
+            normalized["name"] = message["tool_name"]
+        encoded = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
 
 
 class EmergencyCompressionService:
@@ -93,6 +123,7 @@ class EmergencyCompressionService:
         context_segment_id: str,
         active_messages: list[dict[str, Any]],
         conversation_message_count: int,
+        conversation_checksum: str,
         request_tokens: int,
         emergency_threshold_tokens: int,
         policy_snapshot: str,
@@ -101,13 +132,14 @@ class EmergencyCompressionService:
         attempt_id = new_id("emergency")
         archive_reference = self._new_archive_reference()
         base_document: dict[str, Any] = {
-            "format_version": 1,
+            "format_version": 2,
             "attempt_id": attempt_id,
             "state": EmergencyState.TRIGGERED.value,
             "task_id": task_id,
             "context_segment_id": context_segment_id,
             "session_id": session_id,
             "conversation_message_count": conversation_message_count,
+            "conversation_checksum": conversation_checksum,
             "request_tokens": request_tokens,
             "emergency_threshold_tokens": emergency_threshold_tokens,
             "policy_snapshot": policy_snapshot,
@@ -228,6 +260,8 @@ class EmergencyCompressionService:
         self,
         task_id: str,
         context_segment_id: str,
+        *,
+        conversation_messages: list[dict[str, Any]],
     ) -> tuple[RestoredEmergencyContext | None, EmergencyCompressionStatus]:
         segment = self.repository.get_segment(context_segment_id)
         if (
@@ -254,6 +288,12 @@ class EmergencyCompressionService:
                 archive_reference=reference,
                 error_code="archive_mismatch",
             )
+        if document.get("format_version") != 2:
+            return None, EmergencyCompressionStatus(
+                state=EmergencyState.FAILED,
+                archive_reference=reference,
+                error_code="archive_version_unsupported",
+            )
         try:
             state = EmergencyState(str(document.get("state")))
         except ValueError:
@@ -271,16 +311,38 @@ class EmergencyCompressionService:
         )
         compressed = document.get("compressed_messages")
         count = document.get("conversation_message_count")
+        expected_conversation_checksum = document.get("conversation_checksum")
         if state is not EmergencyState.COMPLETED:
             return None, status
-        if not self._valid_messages(compressed) or not isinstance(count, int):
+        if (
+            not self._valid_messages(compressed)
+            or not isinstance(count, int)
+            or not isinstance(expected_conversation_checksum, str)
+        ):
             return None, EmergencyCompressionStatus(
                 state=EmergencyState.FAILED,
                 archive_reference=reference,
                 error_code="archive_corrupt",
             )
+        if not 0 <= count <= len(conversation_messages):
+            return None, EmergencyCompressionStatus(
+                state=EmergencyState.FAILED,
+                archive_reference=reference,
+                error_code="conversation_anchor_invalid",
+            )
+        if (
+            conversation_checksum(conversation_messages, count=count)
+            != expected_conversation_checksum
+        ):
+            return None, EmergencyCompressionStatus(
+                state=EmergencyState.FAILED,
+                archive_reference=reference,
+                error_code="conversation_changed",
+            )
         return RestoredEmergencyContext(
-            cast(list[dict[str, Any]], compressed), count
+            cast(list[dict[str, Any]], compressed),
+            count,
+            expected_conversation_checksum,
         ), status
 
     def load_archive(self, archive_reference: str | None) -> dict[str, Any]:

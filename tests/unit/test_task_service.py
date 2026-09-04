@@ -294,6 +294,108 @@ def test_block_requires_checkpoint_and_emits_distinct_event(tmp_path: Path) -> N
     }
 
 
+@pytest.mark.parametrize(
+    "status",
+    (TaskStatus.BLOCKED, TaskStatus.COMPLETED, TaskStatus.CANCELLED),
+)
+def test_other_session_cannot_transition_active_task(
+    tmp_path: Path,
+    status: TaskStatus,
+) -> None:
+    repository, service, checkpoints = _services(tmp_path / "ownership.db")
+    task = service.create_task(
+        "session-owner", "Owned", "Owner-only lifecycle", task_id="task-owned"
+    ).task
+    checkpoints.create_checkpoint(
+        task.task_id,
+        "session-owner",
+        _checkpoint_payload(task.goal),
+    )
+
+    with pytest.raises(TaskServiceError) as rejected:
+        service.transition_task(
+            task.task_id,
+            "session-other",
+            expected_version=task.version,
+            status=status,
+        )
+
+    assert rejected.value.code == "task_not_active_in_session"
+    assert repository.get_task(task.task_id).status is TaskStatus.ACTIVE
+    owner = repository.get_session_state("session-owner")
+    assert owner is not None
+    assert owner.active_task_id == task.task_id
+
+
+def test_other_session_cannot_update_checkpoint_or_append_event(
+    tmp_path: Path,
+) -> None:
+    repository, service, checkpoints = _services(tmp_path / "write-owner.db")
+    task = service.create_task(
+        "session-owner", "Owned", "Owner-only writes", task_id="task-owned"
+    ).task
+
+    with pytest.raises(TaskServiceError) as update_rejected:
+        service.update_task(
+            task.task_id,
+            "session-other",
+            expected_version=task.version,
+            changes={"current_phase": "foreign"},
+        )
+    with pytest.raises(TaskServiceError) as checkpoint_rejected:
+        checkpoints.create_checkpoint(
+            task.task_id,
+            "session-other",
+            _checkpoint_payload(task.goal),
+        )
+    with pytest.raises(TaskServiceError) as event_rejected:
+        service.append_event(
+            task.task_id,
+            "session-other",
+            EventType.DECISION_MADE,
+            {"decision": "foreign"},
+        )
+
+    assert update_rejected.value.code == "task_not_active_in_session"
+    assert checkpoint_rejected.value.code == "task_not_active_in_session"
+    assert event_rejected.value.code == "task_not_active_in_session"
+    assert repository.get_task(task.task_id).current_phase == ""
+    assert repository.get_latest_checkpoint(task.task_id) is None
+
+
+def test_resume_rejects_task_with_stale_pointer_in_another_session(
+    tmp_path: Path,
+) -> None:
+    repository, service, checkpoints = _services(tmp_path / "stale-owner.db")
+    task = service.create_task(
+        "session-old", "Owned", "Recover safely", task_id="task-owned"
+    ).task
+    checkpoints.create_checkpoint(
+        task.task_id,
+        "session-old",
+        _checkpoint_payload(task.goal),
+    )
+    blocked = repository.update_task(
+        task.task_id,
+        expected_version=task.version,
+        changes={"status": TaskStatus.BLOCKED},
+        updated_at=task.updated_at,
+    )
+
+    with pytest.raises(TaskServiceError) as rejected:
+        service.resume_task(
+            task.task_id,
+            "session-new",
+            expected_version=blocked.version,
+        )
+
+    assert rejected.value.code == "task_still_attached_to_session"
+    assert repository.get_session_state("session-new") is None
+    old = repository.get_session_state("session-old")
+    assert old is not None
+    assert old.active_task_id == task.task_id
+
+
 def test_non_resumable_task_and_invalid_search_limit_fail_closed(
     tmp_path: Path,
 ) -> None:

@@ -160,6 +160,7 @@ class ContextSegmentRecord:
     handoff_reason: str | None
     handoff_policy_snapshot: str | None
     archived_context_reference: str | None
+    start_message_checksum: str | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         return asdict(self)

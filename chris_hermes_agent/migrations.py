@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS context_segments (
     end_time TEXT,
     handoff_reason TEXT,
     handoff_policy_snapshot TEXT,
-    archived_context_reference TEXT
+    archived_context_reference TEXT,
+    start_message_checksum TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_segments_task_start
@@ -154,10 +155,21 @@ def initialize_database(connection: sqlite3.Connection) -> str:
             f"version {SCHEMA_VERSION}."
         )
     connection.executescript(_CORE_SCHEMA)
+    _ensure_segment_anchor_checksum(connection)
     backend = _initialize_search_backend(connection)
     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     connection.commit()
     return backend
+
+
+def _ensure_segment_anchor_checksum(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(context_segments)")
+    }
+    if "start_message_checksum" not in columns:
+        connection.execute(
+            "ALTER TABLE context_segments ADD COLUMN start_message_checksum TEXT"
+        )
 
 
 def _initialize_search_backend(connection: sqlite3.Connection) -> str:

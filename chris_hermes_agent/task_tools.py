@@ -212,7 +212,7 @@ def _error(code: str, message: str) -> str:
 
 
 def _default_repository() -> TaskRepository:
-    from plugins.plugin_storage import (  # type: ignore[import-not-found]
+    from plugins.plugin_storage import (
         plugin_data_dir,
     )
 

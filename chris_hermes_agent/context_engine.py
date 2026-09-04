@@ -23,12 +23,13 @@ from .emergency import (
     EmergencyCompressionStatus,
     EmergencyState,
     RestoredEmergencyContext,
+    conversation_checksum,
 )
 from .handoff_service import HandoffService, HandoffServiceError
 from .models import PolicyResolution
 from .policy import PolicyResolver
 from .store import TaskRepository
-from .task_models import SessionContextState
+from .task_models import SessionContextState, TaskStatus
 from .token_usage import ProviderTokenUsage
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class _SelectionSnapshot:
     conversation_message_count: int
     task_id: str
     context_segment_id: str
+    conversation_checksum: str
 
 
 HANDOFF_CONTEXT_SCHEMA: dict[str, Any] = {
@@ -234,60 +236,184 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         incoming_message: dict[str, Any] | None = None,
         budget_tokens: int = 0,
     ) -> list[dict[str, Any]]:
-        """Append one ephemeral status while preserving the stable prefix."""
+        """Select one bounded request without ever failing open to old history."""
+        conversation = conversation_messages or []
+        try:
+            return self._select_context(
+                request_messages,
+                conversation_messages=conversation,
+                incoming_message=incoming_message,
+                budget_tokens=budget_tokens,
+            )
+        except Exception:
+            logger.exception("Context selection failed; omitting canonical history.")
+            self._reset_emergency_state()
+            selected_base = self._bounded_diagnostic_context(
+                request_messages,
+                conversation,
+                "context_selection_failed",
+            )
+            try:
+                return self._finalize_selection(
+                    selected_base,
+                    conversation,
+                    active_task_id=None,
+                    active_segment_id=None,
+                    snapshot_task_id=None,
+                    snapshot_segment_id=None,
+                )
+            except Exception:
+                logger.exception("Context selection status rendering also failed.")
+                self._selection_snapshot = None
+                self._awaiting_usage = False
+                return selected_base
+
+    def _select_context(
+        self,
+        request_messages: list[dict[str, Any]],
+        *,
+        conversation_messages: list[dict[str, Any]],
+        incoming_message: dict[str, Any] | None,
+        budget_tokens: int,
+    ) -> list[dict[str, Any]]:
+        """Apply durable Task/Segment selection and emergency recovery."""
         del incoming_message, budget_tokens
         if self._awaiting_usage:
             self._clear_usage()
-        repository, state = self._session_repository_state()
+        conversation = conversation_messages
+        repository, state, state_diagnostic = self._session_repository_state()
         active_task_id = state.active_task_id if state is not None else None
         active_segment_id = (
             state.active_context_segment_id if state is not None else None
         )
         selection_task_id = active_task_id
         selection_segment_id = active_segment_id
-        if (
-            repository is not None
-            and state is not None
-            and active_task_id is None
-            and active_segment_id is None
-            and self._session_id is not None
-        ):
-            recovery_segment = repository.get_latest_segment_for_session(
-                self._session_id
-            )
-            if (
-                recovery_segment is not None
-                and recovery_segment.checkpoint_id is not None
-            ):
-                selection_task_id = recovery_segment.task_id
-                selection_segment_id = recovery_segment.context_segment_id
         selected_base = request_messages
+        active_pointer_valid = False
+        emergency_eligible = False
+        selection_diagnostic: str | None = None
+
+        if state_diagnostic is not None:
+            selected_base = self._bounded_diagnostic_context(
+                request_messages,
+                conversation,
+                state_diagnostic,
+            )
+            selection_task_id = None
+            selection_segment_id = None
+        elif repository is not None and self._session_id is not None:
+            if state is None:
+                recovery_segment = repository.get_latest_segment_for_session(
+                    self._session_id
+                )
+                if recovery_segment is not None:
+                    selection_task_id = recovery_segment.task_id
+                    selection_segment_id = recovery_segment.context_segment_id
+                    selection_diagnostic = "session_pointer_missing"
+            elif (active_task_id is None) != (active_segment_id is None):
+                selected_base = self._bounded_diagnostic_context(
+                    request_messages,
+                    conversation,
+                    "context_pointer_partial",
+                )
+                selection_task_id = None
+                selection_segment_id = None
+            elif active_task_id is None and active_segment_id is None:
+                recovery_segment = repository.get_latest_segment_for_session(
+                    self._session_id
+                )
+                if recovery_segment is not None:
+                    selection_task_id = recovery_segment.task_id
+                    selection_segment_id = recovery_segment.context_segment_id
+
         if (
             repository is not None
             and selection_task_id is not None
             and selection_segment_id is not None
+            and self._session_id is not None
         ):
             segment = repository.get_segment(selection_segment_id)
-            if segment is not None and segment.checkpoint_id is not None:
-                task = repository.get_task(selection_task_id)
-                checkpoint = repository.get_checkpoint(segment.checkpoint_id)
-                conversation = conversation_messages or []
+            diagnostic = selection_diagnostic
+            if segment is None:
+                diagnostic = "segment_not_found"
+            elif segment.task_id != selection_task_id:
+                diagnostic = "segment_task_mismatch"
+            elif segment.session_id != self._session_id:
+                diagnostic = "segment_session_mismatch"
+            elif active_task_id is not None and segment.end_time is not None:
+                diagnostic = "active_segment_closed"
+            task = repository.get_task(selection_task_id)
+            if diagnostic is None and task is None:
+                diagnostic = "task_not_found"
+            if (
+                diagnostic is None
+                and active_task_id is not None
+                and task is not None
+                and task.status is not TaskStatus.ACTIVE
+            ):
+                diagnostic = "active_task_status_mismatch"
+
+            fatal_diagnostics = {
+                "segment_not_found",
+                "segment_task_mismatch",
+                "segment_session_mismatch",
+                "active_segment_closed",
+                "task_not_found",
+                "active_task_status_mismatch",
+                "session_pointer_missing",
+            }
+            if segment is None or diagnostic in fatal_diagnostics:
+                selected_base = self._bounded_diagnostic_context(
+                    request_messages,
+                    conversation,
+                    diagnostic or "context_pointer_invalid",
+                )
+            else:
+                checkpoint = (
+                    repository.get_checkpoint(segment.checkpoint_id)
+                    if segment.checkpoint_id is not None
+                    else None
+                )
                 start_message_index = segment.start_message_index
-                if start_message_index == 0:
-                    resume_turn_start = self._find_resume_turn_start(
+                if (
+                    start_message_index == 0
+                    and segment.start_message_checksum is not None
+                ):
+                    if not conversation or not self._handoff_anchor_is_valid(
+                        conversation[0],
+                        segment.start_message_checksum,
+                    ):
+                        start_message_index = self._latest_user_turn_start(conversation)
+                        diagnostic = "segment_anchor_mismatch"
+                elif start_message_index == 0:
+                    activation_turn_start = self._find_task_activation_turn_start(
                         conversation,
                         selection_task_id,
                     )
-                    if resume_turn_start is not None:
-                        start_message_index = resume_turn_start
-                diagnostic = None
+                    if activation_turn_start is None:
+                        start_message_index = self._latest_user_turn_start(conversation)
+                        diagnostic = "activation_boundary_missing"
+                    else:
+                        start_message_index = activation_turn_start
+                elif 0 <= start_message_index < len(conversation):
+                    if not self._handoff_anchor_is_valid(
+                        conversation[start_message_index],
+                        segment.start_message_checksum,
+                    ):
+                        start_message_index = self._latest_user_turn_start(conversation)
+                        diagnostic = "segment_anchor_mismatch"
+                elif start_message_index == len(conversation):
+                    start_message_index = self._latest_user_turn_start(conversation)
+                    diagnostic = "segment_anchor_missing"
                 if not 0 <= start_message_index <= len(conversation):
                     diagnostic = "segment_cursor_invalid"
                     start_message_index = len(conversation)
-                elif task is None:
-                    diagnostic = "task_not_found"
+                elif segment.checkpoint_id is None:
+                    diagnostic = "checkpoint_pending_before_first_handoff"
                 elif checkpoint is None:
                     diagnostic = "checkpoint_not_found"
+                elif task is None:
+                    diagnostic = "task_not_found"
                 elif checkpoint.task_id != task.task_id:
                     diagnostic = "checkpoint_task_mismatch"
                 elif not checkpoint.checksum_is_valid():
@@ -300,11 +426,30 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                     checkpoint=checkpoint,
                     diagnostic=diagnostic,
                 )
-        conversation = conversation_messages or []
-        if repository is not None and active_task_id and active_segment_id:
+                active_pointer_valid = (
+                    active_task_id is not None
+                    and active_segment_id is not None
+                    and segment.end_time is None
+                    and segment.task_id == active_task_id
+                    and segment.session_id == self._session_id
+                    and task is not None
+                    and task.status is TaskStatus.ACTIVE
+                )
+                emergency_eligible = active_pointer_valid and diagnostic in {
+                    None,
+                    "checkpoint_pending_before_first_handoff",
+                }
+
+        if (
+            repository is not None
+            and emergency_eligible
+            and active_task_id is not None
+            and active_segment_id is not None
+        ):
             self._sync_emergency_state(
                 active_task_id,
                 active_segment_id,
+                conversation,
             )
             if self._emergency_context is not None:
                 anchor = self._emergency_context.conversation_message_count
@@ -317,11 +462,31 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                     self._emergency_context = None
                     self._emergency_status = EmergencyCompressionStatus(
                         state=EmergencyState.FAILED,
-                        archive_reference=(self._emergency_status.archive_reference),
+                        archive_reference=self._emergency_status.archive_reference,
                         error_code="conversation_anchor_invalid",
                     )
         else:
             self._reset_emergency_state()
+        return self._finalize_selection(
+            selected_base,
+            conversation,
+            active_task_id=active_task_id,
+            active_segment_id=active_segment_id,
+            snapshot_task_id=active_task_id if emergency_eligible else None,
+            snapshot_segment_id=active_segment_id if emergency_eligible else None,
+        )
+
+    def _finalize_selection(
+        self,
+        selected_base: list[dict[str, Any]],
+        conversation: list[dict[str, Any]],
+        *,
+        active_task_id: str | None,
+        active_segment_id: str | None,
+        snapshot_task_id: str | None,
+        snapshot_segment_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """Append Runtime Status and retain one emergency-safe snapshot."""
         resolution = self.policy_resolution
         selected, estimated = append_runtime_status(
             selected_base,
@@ -340,12 +505,13 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             ),
         )
         self.estimated_prompt_tokens = estimated
-        if active_task_id is not None and active_segment_id is not None:
+        if snapshot_task_id is not None and snapshot_segment_id is not None:
             self._selection_snapshot = _SelectionSnapshot(
                 messages=selected,
                 conversation_message_count=len(conversation),
-                task_id=active_task_id,
-                context_segment_id=active_segment_id,
+                task_id=snapshot_task_id,
+                context_segment_id=snapshot_segment_id,
+                conversation_checksum=conversation_checksum(conversation),
             )
         else:
             self._selection_snapshot = None
@@ -427,6 +593,7 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                 context_segment_id=snapshot.context_segment_id,
                 active_messages=snapshot.messages,
                 conversation_message_count=snapshot.conversation_message_count,
+                conversation_checksum=snapshot.conversation_checksum,
                 request_tokens=observed,
                 emergency_threshold_tokens=self.threshold_tokens,
                 policy_snapshot=self._policy_snapshot(),
@@ -448,6 +615,7 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             self._emergency_context = RestoredEmergencyContext(
                 messages=result.compressed_messages,
                 conversation_message_count=snapshot.conversation_message_count,
+                conversation_checksum=snapshot.conversation_checksum,
             )
             self.compression_count += 1
         return messages
@@ -493,6 +661,9 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
                     ),
                     triggering_message_index=triggering_index,
                     policy_snapshot=self._policy_snapshot(),
+                    triggering_message_checksum=conversation_checksum(
+                        [messages[triggering_index]]
+                    ),
                 )
                 return _success(result.to_json_dict())
             except HandoffServiceError as exc:
@@ -567,9 +738,19 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         self,
         task_id: str,
         segment_id: str,
+        conversation_messages: list[dict[str, Any]],
     ) -> None:
         if self._emergency_segment_id == segment_id:
-            return
+            restored = self._emergency_context
+            if restored is None:
+                return
+            anchor = restored.conversation_message_count
+            if (
+                0 <= anchor <= len(conversation_messages)
+                and conversation_checksum(conversation_messages, count=anchor)
+                == restored.conversation_checksum
+            ):
+                return
         self._emergency_segment_id = segment_id
         self._emergency_context = None
         self._emergency_status = EmergencyCompressionStatus()
@@ -577,6 +758,7 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             restored, status = self._get_emergency_service().restore(
                 task_id,
                 segment_id,
+                conversation_messages=conversation_messages,
             )
         except (OSError, RuntimeError, sqlite3.Error):
             self._emergency_status = EmergencyCompressionStatus(
@@ -597,16 +779,16 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
 
     def _session_repository_state(
         self,
-    ) -> tuple[TaskRepository | None, SessionContextState | None]:
+    ) -> tuple[TaskRepository | None, SessionContextState | None, str | None]:
         if self._session_id is None:
-            return None, None
+            return None, None, None
         try:
             repository = self._get_repository()
             state = repository.get_session_state(self._session_id)
         except sqlite3.Error as exc:
             logger.warning("Unable to read active Context pointer: %s", exc)
-            return None, None
-        return repository, state
+            return None, None, "context_state_unavailable"
+        return repository, state, None
 
     def _policy_snapshot(self) -> str:
         resolution = self.policy_resolution
@@ -644,12 +826,22 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
         return None
 
     @classmethod
-    def _find_resume_turn_start(
+    def _handoff_anchor_is_valid(
+        cls,
+        message: dict[str, Any],
+        expected_checksum: str | None,
+    ) -> bool:
+        if expected_checksum is not None:
+            return conversation_checksum([message]) == expected_checksum
+        return cls._find_handoff_trigger([message]) == 0
+
+    @classmethod
+    def _find_task_activation_turn_start(
         cls,
         messages: list[dict[str, Any]],
         task_id: str,
     ) -> int | None:
-        """Locate the current turn that activated a zero-cursor resume segment."""
+        """Locate the create/resume turn that owns a zero-cursor Segment."""
         for index in range(len(messages) - 1, -1, -1):
             message = messages[index]
             if message.get("role") != "assistant":
@@ -658,7 +850,12 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             if not isinstance(tool_calls, list):
                 continue
             if not any(
-                cls._is_matching_resume_call(tool_call, task_id)
+                cls._is_matching_activation_call(
+                    tool_call,
+                    task_id,
+                    messages,
+                    index,
+                )
                 for tool_call in tool_calls
             ):
                 continue
@@ -668,28 +865,132 @@ class ContextHandoffEngine(ContextEngine):  # type: ignore[misc]
             return index
         return None
 
-    @staticmethod
-    def _is_matching_resume_call(tool_call: object, task_id: str) -> bool:
-        if not isinstance(tool_call, Mapping):
+    @classmethod
+    def _is_matching_activation_call(
+        cls,
+        tool_call: object,
+        task_id: str,
+        messages: list[dict[str, Any]],
+        call_index: int,
+    ) -> bool:
+        parsed = cls._task_action_call(tool_call)
+        if parsed is None:
             return False
+        action, arguments, call_id = parsed
+        argument_task_id = arguments.get("task_id")
+        if action == "resume":
+            return isinstance(argument_task_id, str) and argument_task_id == task_id
+        if action != "create":
+            return False
+        if argument_task_id is not None:
+            return isinstance(argument_task_id, str) and argument_task_id == task_id
+        return (
+            cls._tool_result_created_task(
+                messages,
+                call_index,
+                call_id,
+            )
+            == task_id
+        )
+
+    @staticmethod
+    def _task_action_call(
+        tool_call: object,
+    ) -> tuple[str, Mapping[str, Any], str | None] | None:
+        if not isinstance(tool_call, Mapping):
+            return None
         function = tool_call.get("function")
         if not isinstance(function, Mapping):
-            return False
+            return None
         name = function.get("name")
         arguments = ContextHandoffEngine._json_object(function.get("arguments"))
         if arguments is None:
-            return False
+            return None
         if name == "tool_call":
             if arguments.get("name") != "task_state_manage":
-                return False
+                return None
             arguments = ContextHandoffEngine._json_object(arguments.get("arguments"))
             if arguments is None:
-                return False
+                return None
         elif name != "task_state_manage":
-            return False
-        return (
-            arguments.get("action") == "resume" and arguments.get("task_id") == task_id
-        )
+            return None
+        action = arguments.get("action")
+        if not isinstance(action, str):
+            return None
+        call_id = tool_call.get("id")
+        return action, arguments, call_id if isinstance(call_id, str) else None
+
+    @classmethod
+    def _tool_result_created_task(
+        cls,
+        messages: list[dict[str, Any]],
+        call_index: int,
+        call_id: str | None,
+    ) -> str | None:
+        if call_id is None:
+            return None
+        for message in messages[call_index + 1 :]:
+            if message.get("role") != "tool":
+                continue
+            if message.get("tool_call_id") != call_id:
+                continue
+            payload = cls._json_object(message.get("content"))
+            if payload is None:
+                return None
+            data = payload.get("data")
+            if isinstance(data, Mapping):
+                payload = data
+            task = payload.get("task")
+            if isinstance(task, Mapping) and isinstance(task.get("task_id"), str):
+                return str(task["task_id"])
+            value = payload.get("task_id")
+            return str(value) if isinstance(value, str) else None
+        return None
+
+    @staticmethod
+    def _latest_user_turn_start(messages: list[dict[str, Any]]) -> int:
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].get("role") == "user":
+                return index
+        return len(messages)
+
+    @classmethod
+    def _bounded_diagnostic_context(
+        cls,
+        request_messages: list[dict[str, Any]],
+        conversation_messages: list[dict[str, Any]],
+        diagnostic: str,
+    ) -> list[dict[str, Any]]:
+        """Keep only the stable head and latest user turn on unsafe state."""
+        if conversation_messages and len(request_messages) >= len(
+            conversation_messages
+        ):
+            prefix_length = len(request_messages) - len(conversation_messages)
+            stable_head = request_messages[:prefix_length]
+            start = cls._latest_user_turn_start(conversation_messages)
+            tail = request_messages[prefix_length + start :]
+        else:
+            stable_length = 0
+            for message in request_messages:
+                if message.get("role") not in {"system", "developer"}:
+                    break
+                stable_length += 1
+            stable_head = request_messages[:stable_length]
+            start = cls._latest_user_turn_start(request_messages[stable_length:])
+            tail = request_messages[stable_length + start :]
+        error = {
+            "role": "user",
+            "content": "\n".join(
+                (
+                    "[Context Isolation Error]",
+                    "",
+                    f"Recovery state unavailable: {diagnostic}",
+                    "Older canonical history was omitted. Inspect durable Task state "
+                    "before any mutation.",
+                )
+            ),
+        }
+        return [*stable_head, error, *tail]
 
     @staticmethod
     def _json_object(value: object) -> Mapping[str, Any] | None:

@@ -61,6 +61,7 @@ class HandoffService:
         expected_active_segment_id: str,
         triggering_message_index: int,
         policy_snapshot: str,
+        triggering_message_checksum: str | None = None,
     ) -> HandoffResult:
         for value, field in (
             (session_id, "session_id"),
@@ -170,6 +171,7 @@ class HandoffService:
                     handoff_reason=None,
                     handoff_policy_snapshot=policy_snapshot,
                     archived_context_reference=None,
+                    start_message_checksum=triggering_message_checksum,
                 )
                 self.repository.create_segment(segment)
                 updated_state = self.repository.update_session_state(

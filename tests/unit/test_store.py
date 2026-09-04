@@ -77,6 +77,28 @@ def _checkpoint(task_id: str = "task-1") -> CheckpointRecord:
     )
 
 
+def _segment(
+    task_id: str = "task-1",
+    *,
+    session_id: str = "session-1",
+    segment_id: str = "segment-1",
+) -> ContextSegmentRecord:
+    return ContextSegmentRecord(
+        context_segment_id=segment_id,
+        session_id=session_id,
+        task_id=task_id,
+        parent_segment_id=None,
+        checkpoint_id=None,
+        start_message_index=0,
+        end_message_index=None,
+        start_time="2026-08-26T10:00:00+00:00",
+        end_time=None,
+        handoff_reason=None,
+        handoff_policy_snapshot=None,
+        archived_context_reference=None,
+    )
+
+
 def test_migration_is_idempotent_and_enables_required_sqlite_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -108,6 +130,25 @@ def test_migration_is_idempotent_and_enables_required_sqlite_contract(
         "context_segments",
         "session_context_state",
     } <= tables
+
+
+def test_schema_v1_is_upgraded_with_segment_anchor_checksum(tmp_path: Path) -> None:
+    database_path = tmp_path / "v1.db"
+    connection = sqlite3.connect(database_path, check_same_thread=False)
+    initialize_database(connection)
+    connection.execute(
+        "ALTER TABLE context_segments DROP COLUMN start_message_checksum"
+    )
+    connection.execute("PRAGMA user_version=1")
+    connection.commit()
+
+    initialize_database(connection)
+
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(context_segments)")
+    }
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert "start_message_checksum" in columns
 
 
 @pytest.mark.parametrize(
@@ -291,11 +332,12 @@ def test_optimistic_updates_reject_stale_task_and_session_versions(
     repository = _repository(tmp_path / "data.db")
     with repository.transaction():
         repository.create_task(_task())
+        repository.create_segment(_segment())
         repository.create_session_state(
             SessionContextState(
                 session_id="session-1",
                 active_task_id="task-1",
-                active_context_segment_id=None,
+                active_context_segment_id="segment-1",
                 handoff_pending=False,
                 pending_checkpoint_id=None,
                 last_handoff_at=None,
@@ -312,7 +354,7 @@ def test_optimistic_updates_reject_stale_task_and_session_versions(
             "session-1",
             expected_version=0,
             active_task_id="task-1",
-            active_context_segment_id=None,
+            active_context_segment_id="segment-1",
             handoff_pending=True,
             pending_checkpoint_id=None,
             last_handoff_at=None,
@@ -336,6 +378,40 @@ def test_optimistic_updates_reject_stale_task_and_session_versions(
             handoff_pending=False,
             pending_checkpoint_id=None,
             last_handoff_at=None,
+        )
+
+
+def test_repository_rejects_partial_or_mismatched_active_pointer(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "pointer-invariant.db")
+    repository.create_task(_task())
+    repository.create_task(_task("task-2"))
+    repository.create_segment(_segment())
+
+    with pytest.raises(ValueError, match="both be set or both be null"):
+        repository.create_session_state(
+            SessionContextState(
+                session_id="session-1",
+                active_task_id="task-1",
+                active_context_segment_id=None,
+                handoff_pending=False,
+                pending_checkpoint_id=None,
+                last_handoff_at=None,
+                version=0,
+            )
+        )
+    with pytest.raises(ValueError, match="does not belong to Task"):
+        repository.create_session_state(
+            SessionContextState(
+                session_id="session-1",
+                active_task_id="task-2",
+                active_context_segment_id="segment-1",
+                handoff_pending=False,
+                pending_checkpoint_id=None,
+                last_handoff_at=None,
+                version=0,
+            )
         )
 
 

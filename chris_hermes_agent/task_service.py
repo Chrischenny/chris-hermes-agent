@@ -205,6 +205,25 @@ class TaskService:
             return None
         return self.repository.get_task(state.active_task_id)
 
+    def _require_active_session(
+        self,
+        task_id: str,
+        session_id: str,
+    ) -> SessionContextState:
+        state = self.repository.get_session_state(session_id)
+        if state is None or state.active_task_id != task_id:
+            raise TaskServiceError(
+                "task_not_active_in_session",
+                f"Task {task_id!r} is not active in session {session_id!r}.",
+            )
+        owners = self.repository.list_session_states_for_task(task_id)
+        if any(owner.session_id != session_id for owner in owners):
+            raise TaskServiceError(
+                "task_active_in_multiple_sessions",
+                f"Task {task_id!r} has another active Session pointer.",
+            )
+        return state
+
     def update_task(
         self,
         task_id: str,
@@ -225,6 +244,7 @@ class TaskService:
             event_type = None
         try:
             with self.repository.transaction():
+                self._require_active_session(task_id, session_id)
                 updated = self.repository.update_task(
                     task_id,
                     expected_version=expected_version,
@@ -309,6 +329,14 @@ class TaskService:
                         "checkpoint_corrupt",
                         message,
                     )
+                attached = self.repository.list_session_states_for_task(task_id)
+                if attached:
+                    sessions = ", ".join(state.session_id for state in attached)
+                    raise TaskServiceError(
+                        "task_still_attached_to_session",
+                        f"Task {task_id!r} still has an active Session pointer: "
+                        f"{sessions}.",
+                    )
                 session_state = self.repository.get_session_state(session_id)
                 if session_state and session_state.active_task_id:
                     current = self._require_task(session_state.active_task_id)
@@ -392,6 +420,7 @@ class TaskService:
                 task = self._require_task(task_id)
                 if task.version != expected_version:
                     raise ConcurrentUpdateError("Task version changed.")
+                state = self._require_active_session(task_id, session_id)
                 if (
                     status is TaskStatus.BLOCKED
                     and self.repository.get_latest_checkpoint(task_id) is None
@@ -410,23 +439,21 @@ class TaskService:
                     },
                     updated_at=now,
                 )
-                state = self.repository.get_session_state(session_id)
-                if state and state.active_task_id == task_id:
-                    if state.active_context_segment_id:
-                        self.repository.close_segment(
-                            state.active_context_segment_id,
-                            end_time=now,
-                            handoff_reason=status.value,
-                        )
-                    self.repository.update_session_state(
-                        session_id,
-                        expected_version=state.version,
-                        active_task_id=None,
-                        active_context_segment_id=None,
-                        handoff_pending=False,
-                        pending_checkpoint_id=None,
-                        last_handoff_at=state.last_handoff_at,
+                if state.active_context_segment_id:
+                    self.repository.close_segment(
+                        state.active_context_segment_id,
+                        end_time=now,
+                        handoff_reason=status.value,
                     )
+                self.repository.update_session_state(
+                    session_id,
+                    expected_version=state.version,
+                    active_task_id=None,
+                    active_context_segment_id=None,
+                    handoff_pending=False,
+                    pending_checkpoint_id=None,
+                    last_handoff_at=state.last_handoff_at,
+                )
                 self._append_event(
                     task_id,
                     event_types[status],
@@ -469,6 +496,7 @@ class TaskService:
         self._require_task(task_id)
         now = utc_now()
         with self.repository.transaction():
+            self._require_active_session(task_id, session_id)
             return self._append_event(task_id, event_type, payload, session_id, now)
 
     def _pause_for_switch(

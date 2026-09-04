@@ -333,8 +333,8 @@ class TaskRepository:
                 context_segment_id, session_id, task_id, parent_segment_id,
                 checkpoint_id, start_message_index, end_message_index,
                 start_time, end_time, handoff_reason, handoff_policy_snapshot,
-                archived_context_reference
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                archived_context_reference, start_message_checksum
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 segment.context_segment_id,
@@ -349,6 +349,7 @@ class TaskRepository:
                 segment.handoff_reason,
                 segment.handoff_policy_snapshot,
                 segment.archived_context_reference,
+                segment.start_message_checksum,
             ),
         )
 
@@ -441,6 +442,11 @@ class TaskRepository:
         return segment
 
     def create_session_state(self, state: SessionContextState) -> None:
+        self._validate_active_pointer(
+            state.session_id,
+            state.active_task_id,
+            state.active_context_segment_id,
+        )
         self._connection.execute(
             """
             INSERT INTO session_context_state(
@@ -467,6 +473,22 @@ class TaskRepository:
             ).fetchone()
         return self._session_state_from_row(row) if row is not None else None
 
+    def list_session_states_for_task(
+        self,
+        task_id: str,
+    ) -> tuple[SessionContextState, ...]:
+        """Return every Session that still points at one active Task."""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM session_context_state
+                WHERE active_task_id = ?
+                ORDER BY session_id
+                """,
+                (task_id,),
+            ).fetchall()
+        return tuple(self._session_state_from_row(row) for row in rows)
+
     def update_session_state(
         self,
         session_id: str,
@@ -478,6 +500,11 @@ class TaskRepository:
         pending_checkpoint_id: str | None,
         last_handoff_at: str | None,
     ) -> SessionContextState:
+        self._validate_active_pointer(
+            session_id,
+            active_task_id,
+            active_context_segment_id,
+        )
         cursor = self._connection.execute(
             """
             UPDATE session_context_state SET
@@ -504,6 +531,33 @@ class TaskRepository:
         if state is None:  # pragma: no cover - guarded by successful update
             raise RuntimeError("Updated session state disappeared.")
         return state
+
+    def _validate_active_pointer(
+        self,
+        session_id: str,
+        task_id: str | None,
+        segment_id: str | None,
+    ) -> None:
+        if (task_id is None) != (segment_id is None):
+            raise ValueError(
+                "Active Task and Segment pointers must both be set or both be null."
+            )
+        if task_id is None or segment_id is None:
+            return
+        segment = self.get_segment(segment_id)
+        if segment is None:
+            raise ValueError(f"Active Segment {segment_id!r} does not exist.")
+        if segment.task_id != task_id:
+            raise ValueError(
+                f"Active Segment {segment_id!r} does not belong to Task {task_id!r}."
+            )
+        if segment.session_id != session_id:
+            raise ValueError(
+                f"Active Segment {segment_id!r} does not belong to Session "
+                f"{session_id!r}."
+            )
+        if segment.end_time is not None:
+            raise ValueError(f"Active Segment {segment_id!r} is already closed.")
 
     def search_tasks(
         self,
@@ -742,6 +796,7 @@ class TaskRepository:
             handoff_reason=row["handoff_reason"],
             handoff_policy_snapshot=row["handoff_policy_snapshot"],
             archived_context_reference=row["archived_context_reference"],
+            start_message_checksum=row["start_message_checksum"],
         )
 
     @staticmethod

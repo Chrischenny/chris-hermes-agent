@@ -3,10 +3,10 @@
 Hermes Native Plugin for agent-managed Task State, Checkpoints, and Context
 Rotation during long-running work.
 
-P7 plugin `0.7.6` is deployed to `chris-avatar`; installed-path Doctor, service
-restart, health, and database integrity checks passed. Isolated integration, real
-Hermes Host/install, restart, 10-rotation, and rollback tests are also complete. The
-first Handoff/Emergency under a real developer
+P7 plugin `0.7.7` hardens Session/Task ownership, pre-Handoff Context boundaries,
+persisted Segment anchors, and fail-closed Emergency archive recovery. Isolated
+integration, real Hermes Host/install, restart, 10-rotation, and rollback tests are
+complete. The first Handoff/Emergency under a real developer
 workload remains under normal operational observation. The plugin persists
 profile-scoped Task State, exposes an atomic `handoff_context`
 tool, and ships the Agent workflow that classifies task boundaries, creates

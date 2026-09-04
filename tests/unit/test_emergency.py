@@ -10,6 +10,7 @@ import pytest
 from chris_hermes_agent.emergency import (
     EmergencyCompressionService,
     EmergencyState,
+    conversation_checksum,
 )
 from chris_hermes_agent.migrations import initialize_database
 from chris_hermes_agent.store import TaskRepository
@@ -97,6 +98,7 @@ def test_success_archives_full_context_with_restricted_permissions_and_events(
         context_segment_id=segment_id,
         active_messages=messages,
         conversation_message_count=2,
+        conversation_checksum=conversation_checksum(messages, count=2),
         request_tokens=2_100,
         emergency_threshold_tokens=2_000,
         policy_snapshot='{"source":"exact:model:model-a"}',
@@ -150,6 +152,7 @@ def test_delegate_exception_is_persisted_without_exposing_error_details(
         context_segment_id=segment_id,
         active_messages=messages,
         conversation_message_count=1,
+        conversation_checksum=conversation_checksum(messages),
         request_tokens=2_100,
         emergency_threshold_tokens=2_000,
         policy_snapshot="{}",
@@ -182,6 +185,7 @@ def test_archive_retains_pre_delegate_snapshot_when_delegate_mutates_input(
         context_segment_id=segment_id,
         active_messages=messages,
         conversation_message_count=1,
+        conversation_checksum=conversation_checksum(messages),
         request_tokens=2_100,
         emergency_threshold_tokens=2_000,
         policy_snapshot="{}",
@@ -204,6 +208,7 @@ def test_unsafe_or_no_progress_result_fails_closed(tmp_path: Path) -> None:
         context_segment_id=segment_id,
         active_messages=messages,
         conversation_message_count=1,
+        conversation_checksum=conversation_checksum(messages),
         request_tokens=2_100,
         emergency_threshold_tokens=2_000,
         policy_snapshot="{}",
@@ -226,6 +231,7 @@ def test_result_that_remains_over_threshold_fails_closed(tmp_path: Path) -> None
         context_segment_id=segment_id,
         active_messages=messages,
         conversation_message_count=1,
+        conversation_checksum=conversation_checksum(messages),
         request_tokens=2_100,
         emergency_threshold_tokens=2_000,
         policy_snapshot="{}",
@@ -247,6 +253,7 @@ def test_tampered_archive_is_rejected_during_restore(tmp_path: Path) -> None:
         context_segment_id=segment_id,
         active_messages=messages,
         conversation_message_count=1,
+        conversation_checksum=conversation_checksum(messages),
         request_tokens=2_100,
         emergency_threshold_tokens=2_000,
         policy_snapshot="{}",
@@ -255,11 +262,77 @@ def test_tampered_archive_is_rejected_during_restore(tmp_path: Path) -> None:
     archive_path = tmp_path / result.status.archive_reference
     archive_path.write_text('{"tampered":true}', encoding="utf-8")
 
-    restored, status = service.restore(task_id, segment_id)
+    restored, status = service.restore(
+        task_id,
+        segment_id,
+        conversation_messages=messages,
+    )
 
     assert restored is None
     assert status.state is EmergencyState.FAILED
     assert status.error_code == "archive_corrupt"
+
+
+def test_archive_is_rejected_after_conversation_branch_changes(tmp_path: Path) -> None:
+    _, service, task_id, segment_id = _service(tmp_path)
+    conversation = [{"role": "user", "content": "original branch"}]
+    result = service.compress(
+        session_id="session-1",
+        task_id=task_id,
+        context_segment_id=segment_id,
+        active_messages=[{"role": "user", "content": "x" * 8_000}],
+        conversation_message_count=1,
+        conversation_checksum=conversation_checksum(conversation),
+        request_tokens=2_100,
+        emergency_threshold_tokens=2_000,
+        policy_snapshot="{}",
+        delegate=SuccessfulDelegate([{"role": "user", "content": "compressed"}]),
+    )
+
+    restored, status = service.restore(
+        task_id,
+        segment_id,
+        conversation_messages=[{"role": "user", "content": "rewritten branch"}],
+    )
+
+    assert result.applied is True
+    assert restored is None
+    assert status.state is EmergencyState.FAILED
+    assert status.error_code == "conversation_changed"
+
+
+def test_legacy_archive_is_not_restored_after_selection_rules_change(
+    tmp_path: Path,
+) -> None:
+    _, service, task_id, segment_id = _service(tmp_path)
+    conversation = [{"role": "user", "content": "canonical"}]
+    result = service.compress(
+        session_id="session-1",
+        task_id=task_id,
+        context_segment_id=segment_id,
+        active_messages=[{"role": "user", "content": "selected context"}],
+        conversation_message_count=1,
+        conversation_checksum=conversation_checksum(conversation),
+        request_tokens=2_100,
+        emergency_threshold_tokens=2_000,
+        policy_snapshot="{}",
+        delegate=SuccessfulDelegate([{"role": "user", "content": "compressed"}]),
+    )
+    archive = service.load_archive(result.status.archive_reference)
+    archive.pop("content_checksum")
+    archive.pop("conversation_checksum")
+    archive["format_version"] = 1
+    service._replace_archive(result.status.archive_reference, archive)
+
+    restored, status = service.restore(
+        task_id,
+        segment_id,
+        conversation_messages=conversation,
+    )
+
+    assert restored is None
+    assert status.state is EmergencyState.FAILED
+    assert status.error_code == "archive_version_unsupported"
 
 
 def test_archive_reference_cannot_escape_restricted_directory(

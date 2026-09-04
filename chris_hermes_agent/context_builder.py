@@ -172,6 +172,16 @@ def build_handoff_context(
 
     if diagnostic is None and task is not None and checkpoint is not None:
         bootstrap_content = render_handoff_bootstrap(task, checkpoint)
+    elif diagnostic == "checkpoint_pending_before_first_handoff":
+        bootstrap_content = "\n".join(
+            (
+                "[Context Task Boundary]",
+                "",
+                "A new Task is active and prior Task history was omitted.",
+                "Create a complete checkpoint and perform the required explicit "
+                "handoff before continuing long-running work.",
+            )
+        )
     else:
         reason = diagnostic or "task_or_checkpoint_missing"
         bootstrap_content = "\n".join(
