@@ -1,12 +1,13 @@
 # Hermes Context Handoff 开发交接
 
-> 交接时间：2026-09-02
+> 交接时间：2026-09-04
 >
-> 交接边界：P7 `0.7.6` 已部署到 `chris-avatar`；inactive Task 与同会话 resume
-> 两条完整 canonical history 回灌路径均已修复并完成真实会话只读回放。
+> 交接边界：P7 `0.7.7` 已部署到 `chris-avatar`；Session/Task 所有权、首轮
+> Handoff 前边界、Segment 锚点、异常降级与 Emergency archive 恢复均已加固，
+> 并完成真实长会话只读回放。
 >
-> 下一阶段：继续真实任务，验证新会话能发现并恢复现有 blocked Task，且不再创建
-> 重复 Task
+> 下一阶段：继续真实任务，观察首次由 0.7.7 创建的带 checksum Segment，以及
+> 新旧会话并行操作同一 Task 时的 fail-closed 行为
 
 ## 1. Task
 
@@ -26,6 +27,7 @@
 - P7 Deferred Tool 包装加固：`4773e31 fix: document deferred task tool wrapper`
 - P7 Checkpoint 语义加固：`6c1e497 fix: clarify rejected alternative semantics`
 - P7 跨会话 continuation 加固：`4e3a2c8 fix: prevent duplicate continuation task forks`
+- P7 Context 状态边界加固：`27835c1 fix: harden context state boundaries`
 - 目标 Hermes Profile：`chris-avatar`
 
 ## 2. Goal
@@ -405,6 +407,27 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
   10:36 CST 已按固定 SHA 重装并重启 Gateway 与 Desktop serve；两项服务均为
   active/running、`NRestarts=0`。installed-path 只读回放将出错会话从 1,357 条
   canonical messages 收敛为 17 条、估算 29,819 Token，且保留 Checkpoint Bootstrap；
+- 0.7.7 修复了审计发现的剩余 fail-open 路径：Task 创建或结束后尚未执行首次
+  Handoff、零游标 resume 缺少 canonical 激活调用、Session pointer 部分为空或指向
+  错误/已关闭 Segment、Repository/Engine 异常等场景，均只选择稳定头部与当前 User
+  Turn，并加入诊断边界，不再把完整 canonical history 交给 Provider；
+- Task update、event、checkpoint、pause/block/complete/cancel 和 resume 现在都在同一
+  数据库事务内校验 Session 所有权；另一 Session 已持有 active Task 时全部 fail
+  closed。Session pointer 必须成对存在，且只能指向同 Session、同 Task 的 open
+  Segment；
+- 新 Handoff Segment 持久化触发消息的语义 checksum。Emergency archive 升级为
+  format v2，并保存 canonical conversation prefix checksum；消息被 rewind、编辑或
+  替换后不再仅凭消息数量复用压缩结果，旧版 archive 也不会参与恢复；
+- 0.7.7 部署前快照位于
+  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.7-20260904T041528Z`，同时包含
+  Profile、插件数据库在线备份和全部 Emergency archives。2026-09-04 12:17 CST
+  已按固定 SHA `27835c11c5d4847482fc6eb71336009488f43610` 重装并重启 Gateway 与
+  Desktop serve；两项服务 active/running、`NRestarts=0`，9119 health 为 `ok`；
+- 线上插件数据库已从 schema v1 迁移到 v2，新增
+  `context_segments.start_message_checksum`；`integrity_check=ok` 且无 foreign-key
+  violation。installed-path 只读回放将会话 `20260902_202600_d62df5` 的 1,373 条
+  canonical messages 收敛为 18 条、估算 19,322 Token，保留当前 blocked Task
+  Bootstrap、排除另一 active Task，且未恢复 legacy archive；
 - 连续 10 次 Rotation、Engine 中途重建、稳定 Prefix 和 Segment 父链已验证；
 - 真实 Hermes Host 已验证 Tool Schema Request Pressure、Emergency
   no-progress 边界、canonical Session 不变、Emergency 后正式 Handoff 和独立
@@ -467,8 +490,8 @@ P7 已于 2026-08-27 部署到 `chris-avatar`，Gateway 初始观察通过：
 
 P7 最终验证与上线结果：
 
-- 133 个单元/契约/集成/E2E 测试全部通过；
-- 总覆盖率 87.98%，超过 80% 门槛；
+- 161 个单元/契约/集成/E2E 测试全部通过；
+- 总覆盖率 85.54%，超过 80% 门槛；
 - Ruff format/check 通过；
 - Mypy strict 通过；
 - `uv build` 通过；
@@ -491,6 +514,9 @@ P7 最终验证与上线结果：
   `rejected_alternatives` 的排他边界，并验证空数组是合法的“没有评估候选方案”；
 - 0.7.4 增加 exact-ID `get`、默认搜索三种未结束状态、跨 Session active 禁止重复
   创建的 Skill 契约，以及独立 Task artifact 命名空间拒绝/父子只读继承测试；
+- 0.7.7 增加跨 Session 全部 Task 写操作、stale/partial/mismatched pointer、首轮
+  Handoff 前 active/inactive Task、缺失 resume 激活调用、Repository/Engine 异常、
+  handoff message rewrite、archive prefix rewrite 与 v1 archive 拒绝等回归测试；
 - Hermes Skill Linter 无 Error；仅保留一个 `license` 未声明的 advisory warning，
   因仓库当前没有授权文件，本阶段不代替用户指定许可证；
 - `skill-creator` 的 Codex 专用 `quick_validate.py` 不接受 Hermes 标准顶层
@@ -563,7 +589,7 @@ Task Tools 和 bundled Skill；会迫使 Task 语义进入 ContextEngine 或引�
 
 P7 部署与初始观察已完成，接下来按真实工作负载持续验证：
 
-1. 用新会话描述旧任务但不复述精确标题，观察 0.7.6 是否先穷举全部未结束 Task、
+1. 用新会话描述旧任务但不复述精确标题，观察 0.7.7 是否先穷举全部未结束 Task、
    对历史确切 ID 使用 `get`，并在发现另一 Session 的 active Task 后停止而不 create；
 2. 首次接近 Handoff 甜区时，核对 Runtime Status、Task、Checkpoint、Event 和
    Segment 是否可交叉追溯；

@@ -1,28 +1,34 @@
 # P7 `chris-avatar` rollout and rollback
 
-## Deployment record — 2026-09-02
+## Deployment record — 2026-09-04
 
 - User-approved Policy: `gpt-5.6-sol` ratio Handoff `0.70`, Emergency enabled at
   `0.85`.
 - Runtime Context Limit: 272,000; resolved thresholds: 190,400 and 231,200 Token.
 - Current installed immutable Commit:
-  `f7f1765e5d98325406af675ae8e80deae5a673ec` (plugin `0.7.6`). This supersedes
-  0.7.5 after same-Session resume created an active Segment with cursor zero and replayed
-  1,357 canonical messages. Zero-cursor resume Segments now recover the matching current
-  User Turn from direct or deferred resume calls until explicit rotation establishes the
-  permanent Segment boundary.
+  `27835c11c5d4847482fc6eb71336009488f43610` (plugin `0.7.7`). This supersedes
+  0.7.6 with fail-closed Session/Task ownership, bounded pre-Handoff and corrupt-state
+  selection, persisted Segment message anchors, and archive format v2 conversation-prefix
+  validation. Legacy archives are diagnostic evidence only and are never restored.
 - Protected pre-rollout backup:
-  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.6-20260903T023444Z`.
+  `/home/chen/hermes-rollout-backups/chris-avatar-0.7.7-20260904T041528Z`. In addition
+  to the normal Profile snapshot, this directory contains an online backup of the plugin
+  database and a permission-preserving copy of all Emergency archives made before schema
+  migration.
 - `context.engine=context-handoff`; SOUL migration and installed-path Doctor passed.
 - `hermes-gateway-chris-avatar.service` and the Desktop `hermes-dashboard.service`
-  restarted at 2026-09-03 10:36 CST and remained active/running; the serve process listened
+  restarted at 2026-09-04 12:17 CST and remained active/running with `NRestarts=0`; the serve process listened
   on port 9119 and `/api/health` returned HTTP 200.
 - Current Hermes Python links SQLite 3.50.4, so the plugin intentionally selected
   `journal_mode=DELETE`; plugin data directory/database permissions are `0700/0600`.
-- The live database passed `PRAGMA integrity_check` across the 0.7.6 reinstall. An installed-path
-  read-only replay of the triggering Session reduced 1,357 canonical messages to 17 selected
-  messages (roughly 29,819 Token) while retaining its Checkpoint Bootstrap. Retain the backup,
-  plugin database, archives, logs, timestamp, and Session ID if an issue appears.
+- The live database migrated from schema v1 to v2, added
+  `context_segments.start_message_checksum`, and passed `PRAGMA integrity_check` and
+  `foreign_key_check`. An installed-path read-only replay of Session
+  `20260902_202600_d62df5` reduced 1,373 canonical messages to 18 selected messages
+  (roughly 19,322 Token), retained its Checkpoint Bootstrap, excluded the unrelated active
+  Task, and did not restore a legacy archive. Retain the backup, plugin database, archives,
+  timestamps, and Session ID if an issue appears. The deployment account still cannot read
+  the user journal, so service-log inspection is not claimed as completed.
 
 This runbook is the live boundary for P7. The isolated test suite may run at any time, but
 do not execute the backup, install, Profile mutation, Gateway restart, or rollback commands
